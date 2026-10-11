@@ -1,7 +1,7 @@
 {
   "name": "project-master",
   "displayName": "Project MASTER",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "One coordinator session per project (start / run / handover) plus an end-of-session wrap ritual (PAUSE / COMPLETE) that commits, verifies the push and leaves a paste-ready resume prompt.",
   "author": {
     "name": "ITSDS Ltd"

@@ -2,7 +2,9 @@
 
 <!--
 Save this file in your project repo as `.claude/master.md`.
-Only the two CORE fields are required. Every other field is optional: leave it blank (or delete the line)
+Only the two CORE fields are required. Commands in this file are run only after the owner has approved
+them in their own session (the skills show each one and ask), and are asked about again if this file changes.
+Paths in this file must stay inside the repo, Claude Code's memory directory, or a folder the owner approves. Every other field is optional: leave it blank (or delete the line)
 and the step that uses it is skipped. Never put secrets here; this file is committed with the repo.
 -->
 

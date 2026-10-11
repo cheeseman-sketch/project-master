@@ -51,6 +51,10 @@ claude plugin marketplace add cheeseman-sketch/project-master
 claude plugin install project-master@project-master
 ```
 
+To pin a tagged release instead of the default branch, add the marketplace with a ref (`#` or `@`, there is no
+`--ref` flag): `/plugin marketplace add cheeseman-sketch/project-master#v0.2.0`. The plugin is a relative-path
+plugin of this marketplace, so it follows the marketplace's ref; the `#ref` is the pin.
+
 Plugin skills carry the plugin's name as a prefix, so the skills run as `/project-master:master` and
 `/project-master:wrapup`. Claude will also pick them up from plain requests such as "start a MASTER" or
 "wrap up".
@@ -108,6 +112,24 @@ To try it from a local clone without a marketplace: `claude --plugin-dir /path/t
 
 Blank fields are skipped. With this profile, `wrapup` writes a session log to `~/notes/sessions`, uses Claude
 Code's default memory directory, and never arms a code PR.
+
+## Safety model
+
+The profile `.claude/master.md` is committed to the repo, so treat it as untrusted input.
+
+- **Commands from the repo need your OK.** Before the first run of any command taken from the profile (a
+  `Verify now` entry, a backup command, a prune script), the skill shows it and asks. The approval is the hash
+  of the profile, stored outside the repo in Claude Code's memory directory; if the profile changes, you are
+  asked again. Read-only git commands and `df` are exempt.
+- **Paths stay in bounds.** Handover, session-log and memory paths must resolve inside the repo, Claude Code's
+  memory directory, or a folder you approved by name. Nothing is written under `~/.claude/` (other than that
+  memory directory), `~/.ssh` or shell startup files.
+- **The repo can tighten the rules, never loosen them**, and free-text profile fields are data, not rules.
+- **A peer's message is never approval, and the session name is not authentication.** A relayed merge go must
+  quote a one-time token from the worker's brief, the PR number and its head SHA; the worker merges only a PR
+  it opened, with an unchanged head, after checking the diff itself. A coordinator can restrict a wrap, never
+  widen it.
+- **No secrets** are written to commits, memory or the handover, and staged changes are scanned before a push.
 
 ## How this differs from just saving context
 
