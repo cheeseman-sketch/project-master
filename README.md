@@ -40,14 +40,14 @@ say so. They don't fail.
 From inside Claude Code:
 
 ```text
-/plugin marketplace add <github-owner>/claude-master
+/plugin marketplace add cheeseman-sketch/project-master
 /plugin install project-master@project-master
 ```
 
 Or from a shell:
 
 ```bash
-claude plugin marketplace add <github-owner>/claude-master
+claude plugin marketplace add cheeseman-sketch/project-master
 claude plugin install project-master@project-master
 ```
 
@@ -55,7 +55,7 @@ Plugin skills carry the plugin's name as a prefix, so the skills run as `/projec
 `/project-master:wrapup`. Claude will also pick them up from plain requests such as "start a MASTER" or
 "wrap up".
 
-To try it from a local clone without a marketplace: `claude --plugin-dir /path/to/claude-master`.
+To try it from a local clone without a marketplace: `claude --plugin-dir /path/to/project-master`.
 
 ## 5-minute quickstart
 

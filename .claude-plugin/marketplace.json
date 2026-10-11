@@ -2,7 +2,7 @@
   "name": "project-master",
   "description": "Marketplace for the project-master plugin: a per-project coordinator session and an end-of-session wrap ritual for Claude Code.",
   "owner": {
-    "name": "OWNER_NAME"
+    "name": "ITSDS Ltd"
   },
   "plugins": [
     {
