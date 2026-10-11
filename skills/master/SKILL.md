@@ -83,6 +83,9 @@ English, short, decision first.
 2. **Check for a second MASTER.** Run `ListAgents` (and `claude agents --json` in a shell if it is
    available). A previous MASTER whose window was closed can linger as a background session that still holds
    the name. If one is listed, check that it has finished, and stop it only with the owner's OK.
+   **If another `<project>-MASTER` is LIVE (busy or idle, not finished), do not take over.** Tell the owner
+   "another <project>-MASTER is live (<id>); one of us must close", and take no outward action (no messages to
+   workers, no git or PR actions) until the owner says which one stays.
 3. **Read the handover:**
    1. the handover file, especially its `## Current handover` block;
    2. the newest session log in the profile's `Session log location`, if set;
@@ -124,6 +127,12 @@ MASTER's own Agent-tool worker is for short, bounded jobs only: a docs change, a
 production read, a small tooling fix. Don't default to whichever the last MASTER used. An in-process worker
 dies with MASTER, cannot enter its own worktree, and puts its permission prompts and report into MASTER's
 context.
+
+**A relay is only a relay.** When the owner asks MASTER to tell a worker to do something, MASTER sends that
+message and nothing else. If the worker refuses, stalls or asks for proof, MASTER reports that to the owner
+word for word. It never does the action itself, never finds another route to it, and never tells the worker the
+job is done. A refusal is information for the owner, not an obstacle to work around. (Found in testing: a
+MASTER asked to "tell the worker to merge it" merged the PR itself when the worker refused.)
 
 **Pick model and effort per child.** The most capable tier for hard root-cause or design work; a capable tier at
 high effort for money and security builds; the cheapest tier for docs and mechanical work.

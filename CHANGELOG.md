@@ -2,6 +2,14 @@
 
 All notable changes to this plugin are recorded here. Versions follow `version` in `.claude-plugin/plugin.json`.
 
+## 0.2.1
+
+Fixes from the live multi-session check.
+
+- A relay is only a relay: when the owner asks MASTER to tell a worker to do something and the worker refuses,
+  MASTER reports the refusal and never performs the action itself or by another route.
+- START refuses to take over while another `<project>-MASTER` is live; no outward action until the owner picks one.
+
 ## 0.2.0
 
 Security hardening, plus fixes from the first end-to-end isolated test run.
