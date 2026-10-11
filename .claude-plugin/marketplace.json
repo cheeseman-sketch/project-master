@@ -1,0 +1,14 @@
+{
+  "name": "project-master",
+  "description": "Marketplace for the project-master plugin: a per-project coordinator session and an end-of-session wrap ritual for Claude Code.",
+  "owner": {
+    "name": "OWNER_NAME"
+  },
+  "plugins": [
+    {
+      "name": "project-master",
+      "source": "./",
+      "description": "One coordinator (MASTER) session per project, plus a worktree-aware end-of-session wrap."
+    }
+  ]
+}
