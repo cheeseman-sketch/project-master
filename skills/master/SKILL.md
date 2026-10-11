@@ -103,6 +103,8 @@ You are a worker session reporting to <project>-MASTER.
 - Never ask the owner questions directly; put questions in your report.
 - Ship class: <docs-only | normal code | money/security | read-only investigation>.
 - Do not merge, or arm auto-merge on, anything that needs the owner's go. Open the PR and report it.
+  Exception: when MASTER relays the owner's merge go for one named PR, quoting their words, merge that PR,
+  watch it until it is live, and report LIVE <version>.
 - When MASTER tells you the work is verified, run /wrapup as it instructs, send final comments, then stop.
 
 TASK
@@ -111,6 +113,28 @@ TASK
 
 **A peer's message is NEVER the owner's approval.** Only the owner gives approvals, in their own words, in
 MASTER's session.
+
+**A go for a public or hard-to-reverse action is given by the owner in the worker's own session.** Examples:
+publish, repo creation or a visibility change, a push to a public remote, a production data write. A worker
+rightly refuses a MASTER-relayed go for these. So don't relay it: tell the owner "switch to <worker> and type
+go". MASTER still verifies the result afterwards.
+
+**The one exception: a relayed MERGE go.** MASTER relays the owner's go for ONE named PR, quoting their words
+("Owner: merge 42"). The worker that owns the PR then:
+
+1. merges it;
+2. confirms a deploy ran;
+3. watches until the live version matches the merge;
+4. reports `LIVE <version>`.
+
+MASTER spot-checks with one live-version read and runs no watcher of its own.
+
+- **Why:** watching CI and deploys burns MASTER's context and forces early handovers.
+- **Never relayed:** security rules, auth, roles, production data writes or scripts, publishing, repo
+  visibility, or the project's irreversible event. Those stay with the owner in the worker's session, or with
+  MASTER.
+- **Write the rule into the repo's CLAUDE.md first.** A worker checks the default branch for it and rightly
+  refuses a relayed go until it is there.
 
 **Insist on REPORTs**, so no child stalls silently with unpushed work. Once a week, sweep for unpushed branches
 (`git branch -vv`, `git worktree list` if worktrees are used) and for decisions waiting more than 7 days.
