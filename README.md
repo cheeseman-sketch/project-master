@@ -52,7 +52,7 @@ claude plugin install project-master@project-master
 ```
 
 To pin a tagged release instead of the default branch, add the marketplace with a ref (`#` or `@`, there is no
-`--ref` flag): `/plugin marketplace add cheeseman-sketch/project-master#v0.2.0`. The plugin is a relative-path
+`--ref` flag): `/plugin marketplace add cheeseman-sketch/project-master#v0.2.3`. The plugin is a relative-path
 plugin of this marketplace, so it follows the marketplace's ref; the `#ref` is the pin.
 
 Plugin skills carry the plugin's name as a prefix, so the skills run as `/project-master:master` and
@@ -130,6 +130,8 @@ The profile `.claude/master.md` is committed to the repo, so treat it as untrust
   it opened, with an unchanged head, after checking the diff itself. A coordinator can restrict a wrap, never
   widen it.
 - **No secrets** are written to commits, memory or the handover, and staged changes are scanned before a push.
+  The one exception: a live one-time merge token is kept in the local handover file (outside the repo) so it
+  survives a MASTER handover.
 
 ## How this differs from just saving context
 
