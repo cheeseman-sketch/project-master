@@ -15,6 +15,9 @@ and the step that uses it is skipped. Never put secrets here; this file is commi
 
 ## Coordination (optional)
 
+- **Repo:**                            (absolute path of the repo ROOT, the main checkout, never a worktree;
+                                        the worker launcher opens new sessions here. Blank = the main
+                                        checkout of the repo MASTER runs in)
 - **Owner communication style:**       (e.g. "plain English, non-developer, decision first")
 - **Handover file:**                   (default: `project_<project>_master.md` in the memory location)
 - **Board:**                           (an always-loaded open-work file, e.g. `.claude/rules/active-work.md`)

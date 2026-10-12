@@ -2,6 +2,18 @@
 
 All notable changes to this plugin are recorded here. Versions follow `version` in `.claude-plugin/plugin.json`.
 
+## 0.2.2
+
+MASTER launches worker sessions itself.
+
+- New `skills/master/bin/launch-session` (macOS: Terminal, iTerm, Ghostty): `detect`, `set-terminal`, `run`.
+  It opens a new window already running `claude` in the repo with the brief as the first message; a per-launch
+  runner script keeps the brief out of AppleScript quoting. The terminal choice is saved per user in
+  `~/.claude/launch-session.conf`, asked once on first launch.
+- master, Child sessions: launch steps (terminal asked once, one question per worker, `--repo` is the repo
+  root never a worktree, the owner types `/color`, the merge token is never put in a launched brief).
+- Profile template: new optional `Repo:` field, the absolute repo root the launcher uses.
+
 ## 0.2.1
 
 Fixes from the live multi-session check.

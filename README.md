@@ -151,6 +151,7 @@ answer:
 .claude-plugin/plugin.json        plugin manifest
 .claude-plugin/marketplace.json   single-plugin marketplace (this repo)
 skills/master/SKILL.md            the coordinator routine
+skills/master/bin/launch-session  opens a worker session in a new terminal window (macOS)
 skills/wrapup/SKILL.md            the end-of-session ritual
 templates/master-profile.md       template for a project's .claude/master.md
 ```

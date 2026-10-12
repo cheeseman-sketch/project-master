@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# launch-session: open a new terminal window running a Claude Code worker session.
+# Part of the project-master plugin; used by the master skill (SKILL.md § Child sessions).
+# Supported terminals: Terminal, iTerm, Ghostty (macOS only).
+#
+#   launch-session detect
+#       Lists the supported terminal apps that are installed, one per line.
+#   launch-session set-terminal <App>
+#       Saves the choice to ~/.claude/launch-session.conf (asked once, on first launch).
+#   launch-session run --repo <abs dir> --model <m> --effort <e> --name <name> --brief <file> [--terminal <App>]
+#       Opens the window: cd <repo> && claude --model m --effort e -n name "<brief text>".
+#
+# There is no colour flag in the claude CLI, so the person types /color in the new window.
+# The first launch in each terminal app triggers a macOS Automation prompt ("allow to control
+# Terminal"); it must be allowed once.
+set -euo pipefail
+
+CONF="$HOME/.claude/launch-session.conf"
+SUPPORTED=(Terminal iTerm Ghostty)
+
+app_installed() {
+  case "$1" in
+    Terminal) [[ -d /System/Applications/Utilities/Terminal.app || -d /Applications/Utilities/Terminal.app ]] ;;
+    iTerm) [[ -d /Applications/iTerm.app || -d "$HOME/Applications/iTerm.app" ]] ;;
+    Ghostty) [[ -d /Applications/Ghostty.app || -d "$HOME/Applications/Ghostty.app" ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+die() { echo "launch-session: $*" >&2; exit 1; }
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  detect)
+    for a in "${SUPPORTED[@]}"; do app_installed "$a" && echo "$a"; done
+    exit 0 ;;
+  set-terminal)
+    a="${1:-}"; app_installed "$a" || die "'$a' is not a supported, installed terminal (run: launch-session detect)"
+    mkdir -p "$(dirname "$CONF")"; printf 'terminal=%s\n' "$a" > "$CONF"; echo "saved terminal=$a to $CONF"; exit 0 ;;
+  run) ;;
+  *) sed -n '2,15p' "$0"; exit 2 ;;
+esac
+
+repo= model= effort= name= brief= term=
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo) repo="$2"; shift 2 ;;
+    --model) model="$2"; shift 2 ;;
+    --effort) effort="$2"; shift 2 ;;
+    --name) name="$2"; shift 2 ;;
+    --brief) brief="$2"; shift 2 ;;
+    --terminal) term="$2"; shift 2 ;;
+    *) die "unknown option $1" ;;
+  esac
+done
+[[ -n "$repo" && -n "$model" && -n "$effort" && -n "$name" && -n "$brief" ]] || die "run needs --repo --model --effort --name --brief"
+[[ -d "$repo" ]] || die "repo dir not found: $repo"
+[[ -s "$brief" ]] || die "brief file empty or missing: $brief"
+[[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || die "name must be letters, digits, . _ - only"
+[[ "$model" =~ ^[A-Za-z0-9._-]+$ && "$effort" =~ ^[a-z]+$ ]] || die "bad model or effort"
+if [[ -z "$term" ]]; then
+  [[ -f "$CONF" ]] || die "no terminal chosen yet: run 'launch-session detect', ask the person, then 'launch-session set-terminal <App>'"
+  term="$(sed -n 's/^terminal=//p' "$CONF")"
+fi
+app_installed "$term" || die "terminal '$term' is not installed"
+command -v claude >/dev/null || die "claude CLI not on PATH"
+
+# A per-launch runner script keeps the brief out of AppleScript quoting entirely.
+dir="$(mktemp -d "${TMPDIR:-/tmp}/launch-session.XXXXXX")"
+cp "$brief" "$dir/brief.md"
+cat > "$dir/run.sh" <<EOF
+#!/usr/bin/env bash
+cd $(printf '%q' "$repo") || exit 1
+printf '\\033]0;%s\\007' $(printf '%q' "$name")
+exec claude --model $(printf '%q' "$model") --effort $(printf '%q' "$effort") -n $(printf '%q' "$name") "\$(cat $(printf '%q' "$dir/brief.md"))"
+EOF
+chmod +x "$dir/run.sh"
+
+case "$term" in
+  Terminal)
+    osascript -e "tell application \"Terminal\" to do script \"$dir/run.sh\"" -e 'tell application "Terminal" to activate' >/dev/null ;;
+  iTerm)
+    osascript -e "tell application \"iTerm\" to create window with default profile command \"$dir/run.sh\"" -e 'tell application "iTerm" to activate' >/dev/null ;;
+  Ghostty)
+    open -na Ghostty --args -e "$dir/run.sh" ;;
+esac
+echo "launched '$name' in $term (model=$model effort=$effort, repo=$repo); runner $dir/run.sh"
