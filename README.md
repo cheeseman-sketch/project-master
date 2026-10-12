@@ -52,7 +52,7 @@ claude plugin install project-master@project-master
 ```
 
 To pin a tagged release instead of the default branch, add the marketplace with a ref (`#` or `@`, there is no
-`--ref` flag): `/plugin marketplace add cheeseman-sketch/project-master#v0.2.3`. The plugin is a relative-path
+`--ref` flag): `/plugin marketplace add cheeseman-sketch/project-master#v0.2.4`. The plugin is a relative-path
 plugin of this marketplace, so it follows the marketplace's ref; the `#ref` is the pin.
 
 Plugin skills carry the plugin's name as a prefix, so the skills run as `/project-master:master` and
