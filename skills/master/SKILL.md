@@ -144,6 +144,10 @@ word for word. It never does the action itself, never finds another route to it,
 job is done. A refusal is information for the owner, not an obstacle to work around. (Found in testing: a
 MASTER asked to "tell the worker to merge it" merged the PR itself when the worker refused.)
 
+**Once a worker is live, change its brief only by message.** Editing the brief file after the owner pasted it, or
+after it was launched, reaches nobody: the worker already has its copy. Send the change with SendMessage and ask
+it to confirm. (Found in use: a worker built without a requirement that was added to its brief file later.)
+
 **Pick model and effort per child.** The most capable tier for hard root-cause or design work; a capable tier at
 high effort for money and security builds; the cheapest tier for docs and mechanical work.
 

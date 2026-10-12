@@ -2,6 +2,11 @@
 
 All notable changes to this plugin are recorded here. Versions follow `version` in `.claude-plugin/plugin.json`.
 
+## 0.2.4
+
+- master, Child sessions: once a worker is live, change its brief only by message; editing the brief file
+  afterwards reaches nobody.
+
 ## 0.2.3
 
 Lessons carried over from the coordinator copy this plugin was extracted from.
