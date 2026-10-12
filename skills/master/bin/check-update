@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# check-update: once-a-day check for a newer project-master release.
+# Part of the project-master plugin; run by the preamble of the master and wrapup skills.
+#
+# Prints one line, or nothing:
+#   JUST_UPGRADED <old> <new>        an upgrade finished; printed once, then cleared
+#   UPGRADE_AVAILABLE <installed> <latest>
+#   CHECK_FAILED <reason>            the check could not run; update status is UNKNOWN
+#   (nothing)                        up to date, snoozed, or disabled
+#
+# What it reads: the public tag list of the plugin's GitHub repo (`git ls-remote --tags`), or, if that
+# gives nothing, the plugin.json on the default branch. Nothing else is sent. At most one network check per
+# 24 hours; a failed check is cached for 1 hour as CHECK_FAILED, never as up to date. Network calls time
+# out after 5 seconds. Always exits 0; any internal error prints CHECK_FAILED rather than silence.
+#
+# Turn it off: create <state dir>/disabled, or set PROJECT_MASTER_UPDATE_CHECK=off.
+# State dir: ~/.claude/project-master (override with PROJECT_MASTER_STATE_DIR). Other test overrides are
+# listed in update-lib.sh.
+
+OK_TTL=86400        # 24 h
+FAIL_TTL=3600       # 1 h
+SNOOZE_TTL=604800   # 7 days
+
+main() {
+  set -euo pipefail
+  . "$(cd "$(dirname "$0")" && pwd -P)/update-lib.sh"
+
+  local rc state now installed cache marker snooze line ts kind val latest old new reason
+  state="$PM_STATE_DIR"
+  now="$(pm_now)"
+  cache="$state/last-check"
+  marker="$state/just-upgraded"
+  snooze="$state/snoozed"
+
+  case "${PROJECT_MASTER_UPDATE_CHECK:-on}" in off|OFF|false|0|no) return 0 ;; esac
+  [ -e "$state/disabled" ] && return 0
+
+  if ! installed="$(pm_installed_version)"; then
+    echo "CHECK_FAILED cannot read the installed version from .claude-plugin/plugin.json"
+    return 0
+  fi
+
+  # 1. A finished upgrade: report once, only when the new version is the one now running.
+  if [ -f "$marker" ]; then
+    read -r old new < "$marker" || true
+    if pm_is_semver "${old:-}" && [ "${new:-}" = "$installed" ]; then
+      rm -f "$marker"
+      echo "JUST_UPGRADED $old $new"
+      return 0
+    fi
+    # Not restarted yet, or a stale marker: fall through to the normal check.
+  fi
+
+  # 2. Cached result.
+  latest=""
+  if [ -f "$cache" ]; then
+    read -r ts kind val < "$cache" || true
+    if printf '%s' "${ts:-}" | grep -Eq '^[0-9]+$'; then
+      if [ "${kind:-}" = OK ] && pm_is_semver "${val:-}" && [ $((now - ts)) -lt "$OK_TTL" ]; then
+        latest="$val"
+      elif [ "${kind:-}" = FAIL ] && [ $((now - ts)) -lt "$FAIL_TTL" ]; then
+        reason="$(sed -n '1s/^[0-9]* FAIL //p' "$cache")"
+        echo "CHECK_FAILED ${reason:-unknown} (cached)"
+        return 0
+      fi
+    fi
+  fi
+
+  # 3. Network check.
+  if [ -z "$latest" ]; then
+    mkdir -p "$state"
+    rc=0; latest="$(pm_latest_from_tags)" || rc=$?
+    if [ "$rc" -eq 1 ]; then rc=0; latest="$(pm_latest_from_raw)" || rc=$?; fi
+    if [ "$rc" -eq 0 ]; then
+      printf '%s OK %s\n' "$now" "$latest" > "$cache"
+    else
+      reason="could not read release tags from $(pm_display_url "$PM_REMOTE_REPO")"
+      [ "$rc" -eq 2 ] && reason="$reason (timed out after ${PM_TIMEOUT}s)"
+      printf '%s FAIL %s\n' "$now" "$reason" > "$cache"
+      echo "CHECK_FAILED $reason"
+      return 0
+    fi
+  fi
+
+  [ "$(pm_vercmp "$installed" "$latest")" = -1 ] || return 0
+
+  # 4. Snoozed for this exact version?
+  if [ -f "$snooze" ]; then
+    read -r val ts < "$snooze" || true
+    if [ "${val:-}" = "$latest" ] && printf '%s' "${ts:-}" | grep -Eq '^[0-9]+$' && [ $((now - ts)) -lt "$SNOOZE_TTL" ]; then
+      return 0
+    fi
+  fi
+
+  echo "UPGRADE_AVAILABLE $installed $latest"
+}
+
+out="$(main "$@" 2>/dev/null)"
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  echo "CHECK_FAILED check-update hit an internal error (rc=$rc); update status unknown"
+elif [ -n "$out" ]; then
+  printf '%s\n' "$out" | head -n 1
+fi
+exit 0

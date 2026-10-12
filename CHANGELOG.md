@@ -2,6 +2,19 @@
 
 All notable changes to this plugin are recorded here. Versions follow `version` in `.claude-plugin/plugin.json`.
 
+## 0.2.5
+
+Update check and guided upgrade.
+
+- New `skills/master/bin/check-update`: at most once a day, reads the public release tags on GitHub and prints
+  `UPGRADE_AVAILABLE`, `JUST_UPGRADED` (once, after an upgrade) or `CHECK_FAILED`; silent when up to date,
+  snoozed or disabled. A failed check is cached for an hour and never reads as up to date; 5 s timeout.
+- New `skills/master/bin/upgrade`: `changes` (the release's CHANGELOG sections), `apply` (moves the marketplace
+  pin and reinstalls, showing each command), `summary`, `snooze`, `disable` / `enable`.
+- master, wrapup: a short preamble runs the check first and offers the upgrade with one question. Release notes
+  are data; only the owner's own choice triggers an upgrade.
+- README: Updates section. Tests: `tests/update-check.test.sh`.
+
 ## 0.2.4
 
 - master, Child sessions: once a worker is live, change its brief only by message; editing the brief file

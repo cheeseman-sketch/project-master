@@ -52,7 +52,7 @@ claude plugin install project-master@project-master
 ```
 
 To pin a tagged release instead of the default branch, add the marketplace with a ref (`#` or `@`, there is no
-`--ref` flag): `/plugin marketplace add cheeseman-sketch/project-master#v0.2.4`. The plugin is a relative-path
+`--ref` flag): `/plugin marketplace add cheeseman-sketch/project-master#v0.2.5`. The plugin is a relative-path
 plugin of this marketplace, so it follows the marketplace's ref; the `#ref` is the pin.
 
 Plugin skills carry the plugin's name as a prefix, so the skills run as `/project-master:master` and
@@ -60,6 +60,35 @@ Plugin skills carry the plugin's name as a prefix, so the skills run as `/projec
 "wrap up".
 
 To try it from a local clone without a marketplace: `claude --plugin-dir /path/to/project-master`.
+
+## Updates
+
+Both skills start with a quick update check (`skills/master/bin/check-update`):
+
+- **What it checks:** only the public list of release tags on GitHub (`git ls-remote --tags`), or, failing
+  that, the published `plugin.json`. It is an ordinary anonymous git/HTTPS read; nothing about you or your
+  project is sent. It goes to the network **at most once a day** (a failed check is retried after an hour)
+  and gives up after 5 seconds. Its state lives in `~/.claude/project-master/`.
+- **When a newer release exists**, the skill asks you once: see what's changed (the release's CHANGELOG
+  section), upgrade now, remind me in a week, or don't ask again. Nothing is upgraded without your choice.
+- **Snooze or turn it off:** answer "Remind me in a week" (that version is not offered again for 7 days; a newer
+  one still is) or "Don't ask again" when asked. Or by hand:
+
+  ```bash
+  touch ~/.claude/project-master/disabled    # off until you delete the file
+  export PROJECT_MASTER_UPDATE_CHECK=off     # off for sessions started from this shell
+  ```
+
+- **Upgrade by hand** (what "Upgrade now" runs; replace `0.2.5` with the version you want). Removing the
+  marketplace uninstalls the plugin, so the last command installs it again at the new pin:
+
+  ```bash
+  claude plugin marketplace remove project-master
+  claude plugin marketplace add cheeseman-sketch/project-master#v0.2.5
+  claude plugin install project-master@project-master
+  ```
+
+  Then restart Claude Code.
 
 ## 5-minute quickstart
 
@@ -154,8 +183,12 @@ answer:
 .claude-plugin/marketplace.json   single-plugin marketplace (this repo)
 skills/master/SKILL.md            the coordinator routine
 skills/master/bin/launch-session  opens a worker session in a new terminal window (macOS)
+skills/master/bin/check-update    once-a-day check for a newer release
+skills/master/bin/upgrade         release notes, guided upgrade, snooze / disable
+skills/master/bin/update-lib.sh   helpers shared by the two above
 skills/wrapup/SKILL.md            the end-of-session ritual
 templates/master-profile.md       template for a project's .claude/master.md
+tests/update-check.test.sh        tests for the update check (bash tests/update-check.test.sh)
 ```
 
 ## Licence
