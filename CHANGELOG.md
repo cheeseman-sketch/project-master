@@ -2,6 +2,13 @@
 
 All notable changes to this plugin are recorded here. Versions follow `version` in `.claude-plugin/plugin.json`.
 
+## 0.2.6
+
+Session-length rules.
+
+- master: hand over at the end of each day or when the history is about half full; worker REPORTs capped at
+  about 15 lines (added to the brief block); bulk reading goes to short-lived workers, not into MASTER.
+
 ## 0.2.5
 
 Update check and guided upgrade.

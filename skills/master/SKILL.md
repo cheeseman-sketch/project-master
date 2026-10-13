@@ -183,6 +183,7 @@ You are a worker session reporting to <project>-MASTER.
   it is live and report LIVE <version>.
 - Merge token (one-time, from MASTER): <random token>
 - When MASTER tells you the work is verified, run /wrapup as it instructs, send final comments, then stop.
+- Keep each REPORT to about 15 lines: status, decisions needed, links. Detail goes in the PR or a file.
 
 TASK
 <goal, sources, constraints, definition of done>
@@ -305,6 +306,11 @@ process); memory echoes them second.
 ---
 
 ## HANDOVER: when to stop, and how
+
+**Session length (2026-10-12, found when a MASTER ran two days and two compactions).** Keep MASTER's history
+small: hand over at the end of each working day, or when the history is about half full, whichever comes first.
+Cap worker REPORTs at about 15 lines (detail goes in the PR or a file). Send bulk reading (logs, diffs, long
+files, prod queries) to a short-lived worker that returns a summary; never pull large output into MASTER.
 
 **Signals that it's time:**
 - the conversation has been summarised (compacted) twice;
