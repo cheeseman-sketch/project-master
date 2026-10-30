@@ -2,6 +2,23 @@
 
 All notable changes to this plugin are recorded here. Versions follow `version` in `.claude-plugin/plugin.json`.
 
+## 0.2.7
+
+Handover reminder that survives compaction.
+
+- New SessionStart hook (`hooks/hooks.json`, `hooks/handover-check`), on `compact` and `resume`. In a MASTER
+  session (title ending `-MASTER`, or the master skill was run in it) it states the compaction count and the
+  start date, and says to recommend a handover after 2 compactions or once the session has run past its first
+  day. Silent in every other session; fails open. It counts the compaction in progress, because the harness
+  writes that compaction's boundary only after the hook has run.
+- **Limit:** the hook runs only on a compaction or a resume. A MASTER that runs past the end of the day without
+  compacting is not caught by it; the README suggests the one line to add to your own always-loaded
+  instructions for that.
+- master: a short "When to hand over" block right after the Safety rules. After a compaction the skill is
+  reloaded cut short, and the cut fell before § HANDOVER, so the rule was never seen again (found when a MASTER
+  ran 10 days through 11 compactions). The full steps stay in § HANDOVER.
+- Tests: `tests/handover-check.test.sh`.
+
 ## 0.2.6
 
 Session-length rules.

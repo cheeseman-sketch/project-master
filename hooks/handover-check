@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# SessionStart hook (compact|resume): reminds a MASTER session when it is due a handover.
+#
+# After a compaction the harness reloads the master skill cut short, and the cut falls before § HANDOVER,
+# so a long-running MASTER never sees its own handover rule again. This hook re-states it from outside the
+# model: it counts the transcript's compaction boundaries and the session's age, and speaks up only when
+# the session is a MASTER (title ends "-MASTER", or the master skill was invoked in it).
+#
+# Input: the hook payload on stdin (needs transcript_path; source is optional). Output: SessionStart
+# additionalContext JSON, or nothing. Fails open: any error means silence and exit 0, never a blocked session.
+# Pure bash + grep + date, so it runs on a stock macOS or Linux box. HANDOVER_CHECK_NOW (epoch seconds)
+# overrides the clock for tests.
+
+main() {
+  local payload transcript source session_dir title="" is_master=0
+  payload="$(cat)" || return 0
+
+  transcript="$(printf '%s' "$payload" | grep -o '"transcript_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 \
+    | sed 's/^"transcript_path"[[:space:]]*:[[:space:]]*"//; s/"$//')"
+  source="$(printf '%s' "$payload" | grep -o '"source"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 \
+    | sed 's/^"source"[[:space:]]*:[[:space:]]*"//; s/"$//')"
+  [ -n "$transcript" ] && [ -f "$transcript" ] || return 0
+
+  # --- is this session a MASTER? ---------------------------------------------------------------------------
+  session_dir="${transcript%.jsonl}"
+  if [ -f "$session_dir/custom-title.json" ]; then
+    title="$(grep -o '"customTitle"[[:space:]]*:[[:space:]]*"[^"]*"' "$session_dir/custom-title.json" | tail -n 1 \
+      | sed 's/^"customTitle"[[:space:]]*:[[:space:]]*"//; s/"$//')"
+  fi
+  if [ -z "$title" ]; then
+    title="$(grep -o '"type":"custom-title","customTitle":"[^"]*"' "$transcript" | tail -n 1 \
+      | sed 's/.*"customTitle":"//; s/"$//')"
+  fi
+  case "$title" in *-MASTER) is_master=1 ;; esac
+
+  if [ "$is_master" -eq 0 ]; then
+    # The skill was run as a slash command (a user line whose content starts with the command tags), or
+    # through the Skill tool. Tool output is JSON-escaped (\"), so text that merely quotes these lines,
+    # such as a grep of another transcript, does not match.
+    if grep -qE '"role":"user","content":"<command-message>[^"]*</command-message>\\n<command-name>/([a-z0-9-]+:)?([a-z0-9]+-)?master</command-name>' "$transcript" \
+      || grep -qE '"name":"Skill","input":\{"skill":"([a-z0-9-]+:)?master"' "$transcript"; then
+      is_master=1
+    fi
+  fi
+  [ "$is_master" -eq 1 ] || return 0
+
+  # --- compactions and age ---------------------------------------------------------------------------------
+  local count first_ts start_epoch now start_day today days due msg
+  count="$(grep -c '"subtype":"compact_boundary"' "$transcript")" || count=0
+  # When the compact hook runs, the harness has not yet written this compaction's boundary (seen 2026-10-30:
+  # 0 boundaries on the first compact, 1 on the second). Count it, unless a later version already wrote it.
+  if [ "$source" = "compact" ] && ! tail -n 3 "$transcript" | grep -q '"subtype":"compact_boundary"'; then
+    count=$((count + 1))
+  fi
+  first_ts="$(grep -m 1 -o '"timestamp":"[^"]*"' "$transcript" | sed 's/^"timestamp":"//; s/"$//')"
+  now="${HANDOVER_CHECK_NOW:-$(date +%s)}"
+
+  start_epoch=""
+  if [ -n "$first_ts" ]; then
+    start_epoch="$(date -j -u -f '%Y-%m-%dT%H:%M:%S' "${first_ts%%.*}" +%s 2>/dev/null \
+      || date -u -d "$first_ts" +%s 2>/dev/null)" || start_epoch=""
+  fi
+
+  days=0; start_day=""; today=""
+  if [ -n "$start_epoch" ]; then
+    days=$(( (now - start_epoch) / 86400 ))
+    start_day="$(date -r "$start_epoch" +%F 2>/dev/null || date -d "@$start_epoch" +%F 2>/dev/null)"
+    today="$(date -r "$now" +%F 2>/dev/null || date -d "@$now" +%F 2>/dev/null)"
+  fi
+
+  due=0
+  [ "$count" -ge 2 ] && due=1
+  [ -n "$start_day" ] && [ -n "$today" ] && [ "$start_day" != "$today" ] && due=1
+
+  local age=""
+  if [ -n "$start_day" ]; then
+    if [ "$days" -eq 1 ]; then age="running 1 day (since $start_day)"; else age="running $days days (since $start_day)"; fi
+  fi
+
+  if [ "$due" -eq 1 ]; then
+    msg="MASTER handover check: compaction $count${age:+, session $age}. project-master § HANDOVER says hand over after 2 compactions or at the end of each working day, whichever comes first. Tell the owner now and recommend a handover (run the master skill with handover)."
+  elif [ "$count" -ge 1 ]; then
+    msg="MASTER handover check: compaction $count${age:+, session $age}. project-master § HANDOVER: hand over after 2 compactions or at the end of each working day, whichever comes first. Not due yet; tell the owner the moment either applies."
+  else
+    return 0
+  fi
+  [ "$source" = "resume" ] && msg="$msg (Session resumed.)"
+
+  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$msg"
+}
+
+main 2>/dev/null || true
+exit 0

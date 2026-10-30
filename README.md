@@ -52,7 +52,7 @@ claude plugin install project-master@project-master
 ```
 
 To pin a tagged release instead of the default branch, add the marketplace with a ref (`#` or `@`, there is no
-`--ref` flag): `/plugin marketplace add cheeseman-sketch/project-master#v0.2.6`. The plugin is a relative-path
+`--ref` flag): `/plugin marketplace add cheeseman-sketch/project-master#v0.2.7`. The plugin is a relative-path
 plugin of this marketplace, so it follows the marketplace's ref; the `#ref` is the pin.
 
 Plugin skills carry the plugin's name as a prefix, so the skills run as `/project-master:master` and
@@ -79,12 +79,12 @@ Both skills start with a quick update check (`skills/master/bin/check-update`):
   export PROJECT_MASTER_UPDATE_CHECK=off     # off for sessions started from this shell
   ```
 
-- **Upgrade by hand** (what "Upgrade now" runs; replace `0.2.6` with the version you want). Removing the
+- **Upgrade by hand** (what "Upgrade now" runs; replace `0.2.7` with the version you want). Removing the
   marketplace uninstalls the plugin, so the last command installs it again at the new pin:
 
   ```bash
   claude plugin marketplace remove project-master
-  claude plugin marketplace add cheeseman-sketch/project-master#v0.2.6
+  claude plugin marketplace add cheeseman-sketch/project-master#v0.2.7
   claude plugin install project-master@project-master
   ```
 
@@ -162,6 +162,19 @@ The profile `.claude/master.md` is committed to the repo, so treat it as untrust
   The one exception: a live one-time merge token is kept in the local handover file (outside the repo) so it
   survives a MASTER handover.
 
+## Handover reminder hook
+
+The plugin ships one hook, `hooks/handover-check`, on SessionStart after a compaction or a resume. In a MASTER
+session (title ending `-MASTER`, or one where the master skill was run) it tells the model how many times the
+session has been compacted and when it started, and to recommend a handover after 2 compactions or once the
+session has run past the day it started on. Every other session sees nothing. It needs only bash, grep and date,
+and on any error it stays silent rather than block the session.
+
+**Its limit:** it only runs when a session compacts or resumes. A MASTER that runs past the end of the day
+without compacting is not caught by it; for that, put the rule in your own always-loaded instructions (for
+example your user CLAUDE.md): "Hand over at the end of each working day or after 2 compactions, whichever comes
+first."
+
 ## How this differs from just saving context
 
 Saving context (a summary file, a snapshot command, a long CLAUDE.md) answers "what was I doing?". It doesn't
@@ -187,8 +200,11 @@ skills/master/bin/check-update    once-a-day check for a newer release
 skills/master/bin/upgrade         release notes, guided upgrade, snooze / disable
 skills/master/bin/update-lib.sh   helpers shared by the two above
 skills/wrapup/SKILL.md            the end-of-session ritual
+hooks/hooks.json                  SessionStart (compact|resume) hook wiring
+hooks/handover-check              the handover reminder for MASTER sessions
 templates/master-profile.md       template for a project's .claude/master.md
 tests/update-check.test.sh        tests for the update check (bash tests/update-check.test.sh)
+tests/handover-check.test.sh      tests for the handover hook (bash tests/handover-check.test.sh)
 ```
 
 ## Licence
