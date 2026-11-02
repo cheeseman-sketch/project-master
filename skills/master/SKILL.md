@@ -214,7 +214,9 @@ skill, `bash "${CLAUDE_SKILL_DIR}/bin/launch-session"` (macOS; supports Terminal
    Ask the owner which of the installed apps to use (AskUserQuestion), then run
    `launch-session set-terminal <App>`.
 2. **Ask once per worker** with one AskUserQuestion, recommended option first: the model + effort pair, the name
-   (`<project>-<slug>`) and the colour. Put a one-line summary of the brief in the question.
+   (`<project>-<slug>`). Put a one-line summary of the brief in the question. Never ask about or suggest a
+   session colour (2026-11-02, owner request): the colour is the owner's own choice, set with `/color` if
+   they want one.
 3. Write the brief to the scratchpad, then run
    `launch-session run --repo <abs> --model <m> --effort <e> --name <name> --brief <file>`. It opens a window
    already running `claude` in the repo, with the brief as the first message.
@@ -222,8 +224,7 @@ skill, `bash "${CLAUDE_SKILL_DIR}/bin/launch-session"` (macOS; supports Terminal
    Never a worktree: the worker makes its own the project's usual way, so its session memory and hooks match
    every other session on that project. A blank `Repo:` means the main checkout of the repo MASTER runs in. Work in
    another repo uses that repo's profile; with no profile, ask the owner for the path.
-4. Tell the owner in one line: "launched <name>; type `/color <c>` there" (the CLI has no colour flag). The
-   first launch triggers a macOS Automation prompt for the terminal app, which the owner must allow.
+4. Tell the owner in one line: "launched <name>". The first launch triggers a macOS Automation prompt for the terminal app, which the owner must allow.
 5. **Merge token:** never put it in a launched brief, because then it didn't come through the owner. Leave the
    token line out of the brief; if the worker should take relayed merge gos, give the owner the token in chat
    to type into the new window: `Merge token: <token>`. Otherwise MASTER merges for it.
