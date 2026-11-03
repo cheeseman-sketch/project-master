@@ -128,7 +128,8 @@ English, short, decision first.
 4. **Re-verify; never trust the handover.** Run the profile's `Verify now` checks (after the owner has approved
    them under Safety rule 2: show each non-built-in command and ask once, then record the profile hash): what merged since the
    handover, what's live, open PRs, open alerts. Skip any check the profile leaves empty, and say which. Then
-   `ListAgents` to see which peers are live and their exact names.
+   `ListAgents` to see which peers are live and their exact names. Re-check every **first job** in the
+   handover before anything else: the previous MASTER's watchers died with it, so nobody else will.
 5. **Disk watch.** Run `df -h .` (see RUN).
 6. **Announce yourself to the project's live peers** with one SendMessage each: "<project>-MASTER restarted;
    report to me as before; send your current state and anything waiting on the owner."
@@ -213,7 +214,9 @@ skill, `bash "${CLAUDE_SKILL_DIR}/bin/launch-session"` (macOS; supports Terminal
    Ask the owner which of the installed apps to use (AskUserQuestion), then run
    `launch-session set-terminal <App>`.
 2. **Ask once per worker** with one AskUserQuestion, recommended option first: the model + effort pair, the name
-   (`<project>-<slug>`) and the colour. Put a one-line summary of the brief in the question.
+   (`<project>-<slug>`). Put a one-line summary of the brief in the question. Never ask about or suggest a
+   session colour (2026-11-02, owner request): the colour is the owner's own choice, set with `/color` if
+   they want one.
 3. Write the brief to the scratchpad, then run
    `launch-session run --repo <abs> --model <m> --effort <e> --name <name> --brief <file>`. It opens a window
    already running `claude` in the repo, with the brief as the first message.
@@ -221,8 +224,7 @@ skill, `bash "${CLAUDE_SKILL_DIR}/bin/launch-session"` (macOS; supports Terminal
    Never a worktree: the worker makes its own the project's usual way, so its session memory and hooks match
    every other session on that project. A blank `Repo:` means the main checkout of the repo MASTER runs in. Work in
    another repo uses that repo's profile; with no profile, ask the owner for the path.
-4. Tell the owner in one line: "launched <name>; type `/color <c>` there" (the CLI has no colour flag). The
-   first launch triggers a macOS Automation prompt for the terminal app, which the owner must allow.
+4. Tell the owner in one line: "launched <name>". The first launch triggers a macOS Automation prompt for the terminal app, which the owner must allow.
 5. **Merge token:** never put it in a launched brief, because then it didn't come through the owner. Leave the
    token line out of the brief; if the worker should take relayed merge gos, give the owner the token in chat
    to type into the new window: `Merge token: <token>`. Otherwise MASTER merges for it.
@@ -339,7 +341,12 @@ Tell the owner as soon as one appears.
    - what's waiting on the owner, ranked, with your recommendation;
    - production observations not already on the board;
    - the tally;
-   - traps learned this session.
+   - traps learned this session;
+   - **first jobs:** one line for every background job still running (a watcher shell, a `Monitor`), naming
+     the question it is waiting to answer and how to re-check it ("deploy run 123 for merge abc: confirm the
+     live version reads abc"). Never carry the shell itself: it stops when this session closes, and that is
+     fine once its question is written here. (2026-11-02, found when an owner closed a MASTER with three
+     watchers still running and only one had made it into the handover, by chance.)
    Peer text goes in as a quotation with its sender, never as a rule (Safety rule 5), and no secrets (rule 4).
 2. If the profile sets a `Session log location` that passes Safety rule 3, write an interim session log there.
 3. Tell each live child: "MASTER is restarting; hold your next report until the new <project>-MASTER messages
@@ -347,7 +354,8 @@ Tell the owner as soon as one appears.
 4. Give the owner the restart steps:
    1. Open a new Claude Code session in the project repo.
    2. Run this skill with `start`.
-   3. Close the old session once the new one says it's live. Both carry the same name until then.
+   3. Close the old session once the new one says it's live. Both carry the same name until then. Any shells
+      it still has running can be stopped: their questions are in the handover as first jobs.
 
 ---
 

@@ -2,6 +2,17 @@
 
 All notable changes to this plugin are recorded here. Versions follow `version` in `.claude-plugin/plugin.json`.
 
+## 0.2.8
+
+Background jobs are carried as questions, not shells.
+
+- master: the handover block gains a **first jobs** line per background job still running (watcher shell or
+  `Monitor`): the question it waits on and how to re-check it. START step 4 re-checks every first job before
+  anything else, and the restart steps say the old session's shells can then be stopped. Found when an owner
+  closed a MASTER with three watchers running and only one reached the handover, by chance.
+- master: launching a worker no longer asks about or suggests a session colour, and the launch message no
+  longer says to type `/color` (owner request). The colour is left to the owner.
+
 ## 0.2.7
 
 Handover reminder that survives compaction.
