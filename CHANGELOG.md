@@ -2,6 +2,22 @@
 
 All notable changes to this plugin are recorded here. Versions follow `version` in `.claude-plugin/plugin.json`.
 
+## 0.2.9 — 2026-11-04
+
+A launched worker can be given merge rights at launch.
+
+- master: the launch question now offers a recommended "<model + effort>, can merge" option and a
+  "<model + effort>, no merge" one. For "can merge", MASTER generates the one-time merge token and writes it
+  into the launched brief; the owner choosing that option is their consent that the token came through them.
+  For "no merge" the brief carries no token. A token typed into a window by hand still works. Found in use,
+  when an owner asked why tokens had to be typed by hand.
+- master: the no-token path is spelled out. A worker without a token never takes a relayed go: the owner says
+  "ship #N" in MASTER's session, MASTER reads the diff and checks the head SHA, merges, and asks the worker to
+  watch the deploy and report LIVE. Watching a deploy needs no token.
+- master: the threat model now says plainly that MASTER always knows the token, so it never guarded against
+  MASTER itself; it guards against impersonation, misdirected relays and injected text. Safety rule 4 and the
+  README name the launched brief as the one other place a live token sits.
+
 ## 0.2.8
 
 Background jobs are carried as questions, not shells.

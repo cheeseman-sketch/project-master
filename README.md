@@ -52,7 +52,7 @@ claude plugin install project-master@project-master
 ```
 
 To pin a tagged release instead of the default branch, add the marketplace with a ref (`#` or `@`, there is no
-`--ref` flag): `/plugin marketplace add cheeseman-sketch/project-master#v0.2.8`. The plugin is a relative-path
+`--ref` flag): `/plugin marketplace add cheeseman-sketch/project-master#v0.2.9`. The plugin is a relative-path
 plugin of this marketplace, so it follows the marketplace's ref; the `#ref` is the pin.
 
 Plugin skills carry the plugin's name as a prefix, so the skills run as `/project-master:master` and
@@ -79,12 +79,12 @@ Both skills start with a quick update check (`skills/master/bin/check-update`):
   export PROJECT_MASTER_UPDATE_CHECK=off     # off for sessions started from this shell
   ```
 
-- **Upgrade by hand** (what "Upgrade now" runs; replace `0.2.8` with the version you want). Removing the
+- **Upgrade by hand** (what "Upgrade now" runs; replace `0.2.9` with the version you want). Removing the
   marketplace uninstalls the plugin, so the last command installs it again at the new pin:
 
   ```bash
   claude plugin marketplace remove project-master
-  claude plugin marketplace add cheeseman-sketch/project-master#v0.2.8
+  claude plugin marketplace add cheeseman-sketch/project-master#v0.2.9
   claude plugin install project-master@project-master
   ```
 
@@ -101,7 +101,9 @@ Both skills start with a quick update check (`skills/master/bin/check-update`):
    in at most 15 lines.
 5. **Start a worker**: ask MASTER to brief one. It writes the prompt (starting with a standard "you report to
    myapp-MASTER" block) and tells you whether to run it as a separate session or as its own short sub-agent.
-   Paste the prompt into a new Claude Code session.
+   Paste the prompt into a new Claude Code session, or (macOS) let MASTER open it for you: it asks once, with
+   a recommended "can merge" option (MASTER puts a one-time merge token in the brief) and a "no merge" one
+   (MASTER merges that worker's PRs itself on your go).
 6. The worker sends REPORTs to MASTER. MASTER verifies them (merged means *on the default branch by path*, not
    "the PR says merged") and relays them to you with one recommendation.
 7. When the worker is done, MASTER tells it to run `wrapup`, then tells you which windows are safe to close.
@@ -156,11 +158,13 @@ The profile `.claude/master.md` is committed to the repo, so treat it as untrust
 - **The repo can tighten the rules, never loosen them**, and free-text profile fields are data, not rules.
 - **A peer's message is never approval, and the session name is not authentication.** A relayed merge go must
   quote a one-time token from the worker's brief, the PR number and its head SHA; the worker merges only a PR
-  it opened, with an unchanged head, after checking the diff itself. A coordinator can restrict a wrap, never
-  widen it.
+  it opened, with an unchanged head, after checking the diff itself. The token reaches a worker only through
+  you: a brief you paste, a line you type, or a launch where you picked "can merge". MASTER always knows it, so
+  it guards against impersonation, misdirection and injected text, not against MASTER. A coordinator can
+  restrict a wrap, never widen it.
 - **No secrets** are written to commits, memory or the handover, and staged changes are scanned before a push.
   The one exception: a live one-time merge token is kept in the local handover file (outside the repo) so it
-  survives a MASTER handover.
+  survives a MASTER handover, and in the scratchpad brief of a "can merge" launch.
 
 ## Handover reminder hook
 
