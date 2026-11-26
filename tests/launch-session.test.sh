@@ -24,7 +24,7 @@ H="$T/home"; F="$T/proc"
 
 proc() { # proc <pid> <comm> <ppid> <tty> [cwd]
   mkdir -p "$F/$1"; printf '%s' "$2" > "$F/$1/comm"; printf '%s' "$3" > "$F/$1/ppid"; printf '%s' "$4" > "$F/$1/tty"
-  printf '%s' "${5:-}" > "$F/$1/cwd"; : > "$F/$1/children"; printf 'Thu 26 Nov 09:00:00 2026' > "$F/$1/lstart"
+  printf '%s' "${5:-}" > "$F/$1/cwd"; printf 'Thu 26 Nov 09:00:00 2026' > "$F/$1/lstart"; printf '01:02:03' > "$F/$1/etime"
 }
 session() { # session <pid> <name> <status> <startedAt> <sessionId>
   printf '{"pid":%s,"sessionId":"%s","cwd":"%s","startedAt":%s,"name":"%s","status":"%s"}' "$1" "$5" "$REPO" "$4" "$2" "$3" \
@@ -48,7 +48,7 @@ fixture() { # a valid restart overlap: old copy idle in Terminal, new copy busy 
   proc $OLD claude 90000 ttys901 "$REPO"
   printf '%s' "$OLD_START" > "$F/$OLD/lstart"
   printf 'claude --model opus --effort high -n acme-x You are a worker session reporting to acme-MASTER.\\012- Send REPORT 1' > "$F/$OLD/args"
-  printf 'npm exec some-mcp\ncaffeinate\n' > "$F/$OLD/children"
+  proc 90003 'npm exec some-mcp' $OLD '??'; proc 90004 caffeinate $OLD '??'
   proc $NEW claude 90010 ttys902 "$REPO"
   session $OLD acme-x idle 1000 sid-old
   session $NEW acme-x busy 2000 sid-new
@@ -78,7 +78,7 @@ contains "close: a loop wakeup that was stopped is fine"         "CLOSED:" "$(st
 fixture; : > "$TR"
 contains "close: a session that never scheduled anything is fine" "CLOSED:" "$(std_close)"
 
-fixture; printf 'claude\nvim\n' >> "$F/$OLD/children"; proc 90002 vim 90000 ttys901 "$REPO"
+fixture; proc 90002 vim 90000 ttys901 "$REPO"
 out=$(std_close)
 contains "close: a non-shell left on the tty keeps the window open" "window left open: still running on ttys901: vim" "$out"
 lacks    "  ...and runs no AppleScript"                           "osascript" "$(cat "$F/actions.log")"
@@ -104,7 +104,7 @@ set_dead()         { rm -rf "${F:?}/$OLD"; }
 set_no_record()    { rm "$H/.claude/sessions/$OLD.json"; }
 set_no_ledger()    { rm "$H/.claude/launch-session.launched"; printf 'claude --model opus -n acme-x' > "$F/$OLD/args"; }
 set_reused_pid()   { printf 'Fri 27 Nov 08:00:00 2026' > "$F/$OLD/lstart"; printf 'claude' > "$F/$OLD/args"; }
-set_bg_shell()     { printf '/bin/zsh\n' >> "$F/$OLD/children"; }
+set_bg_shell()     { proc 90005 /bin/zsh $OLD ttys901; }
 set_cron_unlisted() { : > "$TR"; tr_line "$LIST_EMPTY"; tr_line "$CREATE"; }
 set_cron_left()    { : > "$TR"; tr_line "$CREATE"; tr_line "$LIST_FULL"; }
 set_wake_pending() { : > "$TR"; tr_line "$WAKE_STOP"; tr_line "$WAKE_PENDING"; }
@@ -163,6 +163,34 @@ contains "  ...naming its command"                               "is not a claud
 
 lacks "script never uses SIGKILL"  "kill -9" "$(grep -v '^#' "$LS")"
 lacks "script never uses -KILL"    "-KILL" "$(grep -v '^#' "$LS")"
+
+
+# --- children: a session's own live child processes --------------------------------------------------------
+fixture
+kids() { LAUNCH_SESSION_FAKE_PROC="$F" bash "$LS" children "$@" 2>&1; }
+out=$(kids $OLD); rc=$?
+expect   "children: only MCP servers and helpers: exit 0"        0 "$rc"
+contains "  ...says no background shells"                        "no background shells running" "$out"
+contains "  ...and lists the helpers as other"                   "other pid=90004  caffeinate" "$out"
+proc 90005 /bin/zsh $OLD ttys901; printf '/bin/zsh -c until [ -s task.output ]; do sleep 5; done' > "$F/90005/args"
+proc 90006 sleep 90005 ttys901
+out=$(kids $OLD); rc=$?
+expect   "children: a wait loop is found: exit 1"                1 "$rc"
+contains "  ...shown as a SHELL with its command"                "SHELL pid=90005 up=01:02:03  /bin/zsh -c until [ -s task.output ]" "$out"
+contains "  ...with what it is running now"                      "runs: sleep pid=90006" "$out"
+contains "  ...and says to stop it or record it as a first job"  "1 background shell(s) running" "$out"
+out=$(kids 99999); rc=$?
+expect   "children: a pid that is not running exits 1 with a message" 1 "$rc"
+contains "  ...naming it"                                        "pid 99999 is not running" "$out"
+
+# Real processes: the shell running the check is never listed as a background job.
+sleep 30 & S1=$!
+bash -c 'sleep 30; :' & S2=$!
+out=$(bash "$LS" children $$ 2>&1); rc=$?
+kill $S1 $S2 2>/dev/null; wait $S1 $S2 2>/dev/null
+contains "real: a background bash child is a SHELL"               "SHELL pid=$S2" "$out"
+contains "  ...a plain sleep child is other"                      "other pid=$S1  sleep" "$out"
+expect   "  ...exactly one shell (the capture subshell is left out)" "1 background shell(s) running: stop each one whose question is answered or that is a stuck wait; record the rest as first jobs" "$(printf '%s\n' "$out" | tail -n 1)"
 
 # --- who -------------------------------------------------------------------------------------------------------
 fixture

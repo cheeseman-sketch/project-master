@@ -231,8 +231,9 @@ answer:
 .claude-plugin/marketplace.json   single-plugin marketplace (this repo)
 skills/master/SKILL.md            the coordinator routine
 skills/master/restart-worker.md   the worker-restart procedure (pause, relaunch, compare wakes, close)
+skills/master/background-jobs.md  the live check of a session's own background jobs (handover, PAUSE)
 skills/master/bin/launch-session  opens a worker session in a new terminal window (macOS); restart, who,
-                                  check-wakes and close for a worker restart
+                                  check-wakes and close for a worker restart; children for a handover
 skills/master/bin/check-update    once-a-day check for a newer release
 skills/master/bin/upgrade         release notes, guided upgrade, snooze / disable
 skills/master/bin/update-lib.sh   helpers shared by the two above

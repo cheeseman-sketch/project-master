@@ -19,6 +19,10 @@
 #   launch-session who <name>
 #       Lists every live session with that name (pid, start, status, cwd, tty, launched-by-this-launcher),
 #       oldest first. During a restart the old and the new copy share the name; the pid tells them apart.
+#   launch-session children [<claude pid> | self]
+#       Lists a session's own live child processes. Shells are background tasks, Monitors or wait loops,
+#       shown with what they are running now; anything else is usually an MCP server. Exit 1 if any shell
+#       runs. A handover's "first jobs" and a PAUSE's wakes come from this live check, never from memory.
 #   launch-session check-wakes --note <file> --report <file>
 #       Compares the note's "Scheduled wakes" checklist with the WAKE lines of the new session's REPORT 1.
 #       Prints MATCH (exit 0) or MISMATCH with the differences (exit 1); exit 2 if either side is unreadable.
@@ -34,8 +38,9 @@
 # Terminal"); it must be allowed once.
 #
 # Test seam: LAUNCH_SESSION_FAKE_PROC=<dir> reads process facts from <dir>/<pid>/{comm,args,tty,lstart,
-# ppid,cwd,children} instead of ps/lsof, and logs signals and window closes to <dir>/actions.log instead of
-# sending them. It can only make the script do LESS (nothing real is signalled or closed).
+# ppid,cwd,etime} instead of ps/lsof (a process's children are the dirs whose ppid names it), and logs
+# signals and window closes to <dir>/actions.log instead of sending them. It can only make the script do LESS
+# (nothing real is signalled or closed).
 set -euo pipefail
 
 CONF="$HOME/.claude/launch-session.conf"
@@ -70,8 +75,15 @@ p_get() { # p_get <pid> <field>
     lstart) LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | sed 's/^ *//; s/ *$//' ;;
     ppid) ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ' ;;
     cwd) lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1 ;;
-    children) ps -ax -o ppid=,comm= 2>/dev/null | awk -v p="$pid" '$1 == p { $1 = ""; sub(/^ /, ""); print }' ;;
+    etime) ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ' ;;
   esac || true
+}
+p_child_pids() { # pids whose parent is <pid>
+  local d
+  if [[ -n "$FAKE" ]]; then
+    for d in "$FAKE"/*/; do [[ -f "$d/ppid" && "$(cat "$d/ppid")" == "$1" ]] && basename "$d"; done; return 0
+  fi
+  ps -ax -o pid=,ppid= 2>/dev/null | awk -v p="$1" '$2 == p { print $1 }' || true
 }
 p_tty_procs() { # comm of every process on a tty
   local tty="$1" d
@@ -273,7 +285,9 @@ $pid
 
   # No wake left in the old copy: no background shell, and nothing pending in its transcript.
   local child shells=""
-  while IFS= read -r child; do [[ -n "$child" ]] && is_shell "$child" && shells="$shells $child"; done < <(p_get "$pid" children)
+  while IFS= read -r child; do
+    [[ -n "$child" ]] && is_shell "$(p_get "$child" comm)" && shells="$shells $(basename -- "$(p_get "$child" comm)")($child)"
+  done < <(p_child_pids "$pid")
   [[ -z "$shells" ]] || refuse "pid $pid still has a background shell running (${shells# }); it must stop its own background tasks first"
   local sid transcript reason
   sid="$(json_str "$sj" sessionId)"
@@ -314,6 +328,42 @@ $pid
   echo "  window: $win"
   if p_alive "$keep"; then echo "  kept: new '$name' pid $keep is still running"
   else echo "  WARNING: the new '$name' pid $keep is no longer running; tell the owner now" >&2; exit 5; fi
+}
+
+# children [<claude pid> | self]: this session's own live child processes, for a handover or a PAUSE. Shells
+# are background tasks, Monitors or wait loops (each must be stopped or carried as a first job); the shell
+# running this very command is left out. Anything else is usually an MCP server or a helper. Exit 1 if any
+# shell is running, 0 if none.
+cmd_children() {
+  local pid="${1:-self}" anc a c kids k shells=0 others=0
+  anc="$(real_ancestors)"
+  if [[ "$pid" == self ]]; then
+    pid=""
+    while IFS= read -r a; do [[ "$(basename -- "$(ps -o comm= -p "$a" 2>/dev/null | sed 's/^ *//')")" == claude ]] && { pid="$a"; break; }; done <<< "$anc"
+    [[ -n "$pid" ]] || die "children self: no claude process above this shell; pass the session's pid"
+  fi
+  [[ "$pid" =~ ^[0-9]+$ ]] && p_alive "$pid" || die "children: pid $pid is not running"
+  echo "session pid $pid ($(basename -- "$(p_get "$pid" comm)")):"
+  while IFS= read -r k; do
+    [[ -n "$k" ]] || continue
+    case "
+$anc
+" in *"
+$k
+"*) continue ;; esac
+    c="$(p_get "$k" comm)"
+    if is_shell "$c"; then
+      shells=$((shells + 1))
+      echo "  SHELL pid=$k up=$(p_get "$k" etime)  $(p_get "$k" args | cut -c1-120)"
+      while IFS= read -r a; do [[ -n "$a" ]] && echo "    runs: $(basename -- "$(p_get "$a" comm)") pid=$a up=$(p_get "$a" etime)"; done < <(p_child_pids "$k")
+    else
+      others=$((others + 1))
+      echo "  other pid=$k  $(basename -- "$c")  (usually an MCP server or helper; leave it)"
+    fi
+  done < <(p_child_pids "$pid")
+  if [[ $shells -eq 0 ]]; then echo "no background shells running"; return 0; fi
+  echo "$shells background shell(s) running: stop each one whose question is answered or that is a stuck wait; record the rest as first jobs"
+  return 1
 }
 
 cmd_who() {
@@ -359,6 +409,7 @@ case "$cmd" in
     a="${1:-}"; app_installed "$a" || die "'$a' is not a supported, installed terminal (run: launch-session detect)"
     mkdir -p "$(dirname "$CONF")"; printf 'terminal=%s\n' "$a" > "$CONF"; echo "saved terminal=$a to $CONF"; exit 0 ;;
   who) cmd_who "$@"; exit $? ;;
+  children) rc=0; cmd_children "$@" || rc=$?; exit $rc ;;
   check-wakes)
     note="" report=""
     while [[ $# -gt 0 ]]; do case "$1" in --note) note="${2:-}"; shift 2 ;; --report) report="${2:-}"; shift 2 ;; *) die "unknown option $1" ;; esac; done

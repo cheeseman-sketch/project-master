@@ -256,7 +256,11 @@ session, so a PAUSE writes them down and then cancels them. If the session is re
 restarting a long-running worker), the next session re-arms them from the note, and old and new never both
 fire. (2026-11-26, found when a coordinator restarted two long-running workers by hand.)
 
-1. **List them:** run CronList, and check the background tasks and loop wakeups this session started.
+1. **List them from a live check, never from memory:** run CronList, check the background tasks, Monitors and
+   loop wakeups this session started, and run
+   `bash "${CLAUDE_PLUGIN_ROOT}/skills/master/bin/launch-session" children self`. That lists this session's
+   own shells (background tasks and wait loops) and what each is running now, and leaves MCP servers out. A
+   stuck wait or a job whose question is already answered is stopped, not written down.
 2. **Write the resume note** to `resume_<session name or branch>.md` in the memory location (step 3), or to a
    path a coordinator named if it passes the path rule. Overwrite this session's own earlier note of that
    name, and never delete anything else. It is a hand-off file, so it gets no `MEMORY.md` line. Contents: what's
@@ -272,8 +276,9 @@ fire. (2026-11-26, found when a coordinator restarted two long-running workers b
    expression or command. A long cron prompt goes in full under a following `### Wake details` heading, never
    only in this session.
 3. **Cancel every wake:** CronDelete each job, TaskStop each background task, and ScheduleWakeup with
-   `stop: true` for a loop. Then **run CronList again and check that it shows no jobs**; a coordinator's close
-   check looks for that run in the transcript.
+   `stop: true` for a loop. Then **run CronList and `launch-session children self` again**: CronList must show
+   no jobs, and children must say "no background shells running". A coordinator's close
+   check looks for that CronList run in the transcript.
 4. **Confirm in the final report:** the note's absolute path, and `wakes cancelled: <n> (CronList: no jobs)` or
    `scheduled wakes: none`.
 
