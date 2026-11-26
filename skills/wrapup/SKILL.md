@@ -11,7 +11,8 @@ session has nothing to commit; a repo with no remote has nothing to push), but *
 
 **Two modes; decide which in step 0.5.** Steps 1–4 run the same in both. Only the git endgame differs.
 - **PAUSE**: end of a phase, resuming later, or stopping context drift. Preserve everything so the next
-  session picks up clean: WIP commit, push to the branch, NO PR, NO merge.
+  session picks up clean: WIP commit, push to the branch, NO PR, NO merge. Its scheduled wakes are written
+  into a resume note and then cancelled (step 6.6).
 - **COMPLETE**: this work package is finished. Commit, push, open the PR if the project uses PRs, and apply the
   project's merge policy.
 
@@ -177,7 +178,7 @@ the most important, and it is the one most likely to be missing.
 
 **Both modes commit and push**; work is never left only in the working tree.
 - **PAUSE:** commit with a WIP message (`wip: <phase>: <what's done so far>`). Put a short resume snapshot in the
-  commit body (done / next / traps), push, then skip to step 6.5.
+  commit body (done / next / traps), push, then skip to step 6.5, then 6.6.
 - **COMPLETE:** commit in the project's style, push, then continue to step 6.
 
 **Discover the workflow before acting.** Read CLAUDE.md for git workflow, branching and commit conventions, and
@@ -247,6 +248,37 @@ run it, and report `deferred: awaiting approval`. Once approved, run it and chec
 result; don't trust a stale log line. Report
 `pushed / nothing to do / deferred / FAILED`. If not configured, skip.
 
+## 6.6 Scheduled wakes and the resume note (PAUSE mode, always)
+
+A session can hold **scheduled wakes**: cron jobs (CronCreate), background tasks it started (a
+`run_in_background` shell, a `Monitor`), or a self-paced loop (ScheduleWakeup). They live only inside this
+session, so a PAUSE writes them down and then cancels them. If the session is resumed or relaunched (a coordinator
+restarting a long-running worker), the next session re-arms them from the note, and old and new never both
+fire. (2026-11-26, found when a coordinator restarted two long-running workers by hand.)
+
+1. **List them:** run CronList, and check the background tasks and loop wakeups this session started.
+2. **Write the resume note** to `resume_<session name or branch>.md` in the memory location (step 3), or to a
+   path a coordinator named if it passes the path rule. Overwrite this session's own earlier note of that
+   name, and never delete anything else. It is a hand-off file, so it gets no `MEMORY.md` line. Contents: what's
+   done, the next step, traps, the branch, the resume prompt (step 7), and this section, exactly:
+
+   ```markdown
+   ## Scheduled wakes
+   - [ ] <time + zone> | <what it checks> | <how to re-arm it>
+   ```
+
+   One line per wake, or the single line `- none`. The time is absolute with its zone (`18:10 Europe/London`,
+   `2026-11-27 09:00 UTC`) or a stated interval (`every 30 min`). "How to re-arm" names the tool and the cron
+   expression or command. A long cron prompt goes in full under a following `### Wake details` heading, never
+   only in this session.
+3. **Cancel every wake:** CronDelete each job, TaskStop each background task, and ScheduleWakeup with
+   `stop: true` for a loop. Then **run CronList again and check that it shows no jobs**; a coordinator's close
+   check looks for that run in the transcript.
+4. **Confirm in the final report:** the note's absolute path, and `wakes cancelled: <n> (CronList: no jobs)` or
+   `scheduled wakes: none`.
+
+COMPLETE mode skips this step unless a coordinator asks for it.
+
 ## 7. Final report and resume prompt
 
 One short message, under ~10 lines:
@@ -257,6 +289,7 @@ One short message, under ~10 lines:
 - commit SHA(s), push verified (ls-remote match: yes / no / no remote), PR URL and merge status;
 - topic check line, if configured;
 - backup flush result, if configured;
+- PAUSE: the resume note's absolute path and the wakes line from 6.6;
 - anything blocked or skipped, and why.
 
 ### Always finish with the resume prompt

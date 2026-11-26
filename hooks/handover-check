@@ -1,15 +1,58 @@
 #!/usr/bin/env bash
-# SessionStart hook (compact|resume): reminds a MASTER session when it is due a handover.
+# SessionStart hook (compact|resume): reminds a MASTER session when it is due a handover, and a worker
+# session when it is due a restart.
 #
 # After a compaction the harness reloads the master skill cut short, and the cut falls before § HANDOVER,
 # so a long-running MASTER never sees its own handover rule again. This hook re-states it from outside the
 # model: it counts the transcript's compaction boundaries and the session's age, and speaks up only when
 # the session is a MASTER (title ends "-MASTER", or the master skill was invoked in it).
 #
+# A worker (its first message is the brief header "You are a worker session reporting to <X>-MASTER") is
+# told, once it is due, to put "RESTART DUE" in its next REPORT to <X>-MASTER. It is text only: the hook
+# never restarts anything. Due = 2 compactions or 2 days by default; the project's .claude/master.md can set
+# "Worker restart after compactions:" and "Worker restart after days:" (a number, 0 or "off" = never).
+#
 # Input: the hook payload on stdin (needs transcript_path; source is optional). Output: SessionStart
 # additionalContext JSON, or nothing. Fails open: any error means silence and exit 0, never a blocked session.
 # Pure bash + grep + date, so it runs on a stock macOS or Linux box. HANDOVER_CHECK_NOW (epoch seconds)
 # overrides the clock for tests.
+
+# profile_number <profile> <field label> <default>: the first number after "<label>:" in the profile, 0 for
+# "off", else the default. Only digits are ever read from the profile; its text never reaches the output.
+profile_number() {
+  local v
+  [ -f "$1" ] || { echo "$3"; return 0; }
+  v="$(awk -v lab="$2" '
+    BEGIN { lab = tolower(lab) ":" }
+    { l = tolower($0); i = index(l, lab)
+      if (i) { r = substr(l, i + length(lab)); sub(/\(.*/, "", r); gsub(/[*`]/, " ", r)
+        if (match(r, /[0-9]+/)) print substr(r, RSTART, RLENGTH); else if (r ~ /(^|[^a-z])off([^a-z]|$)/) print 0
+        exit } }' "$1")"
+  if [ -n "$v" ]; then echo "$v"; else echo "$3"; fi
+}
+
+worker_message() { # worker_message <payload> <count> <days> <start_day> <title> <master> <source>
+  local payload="$1" count="$2" days="$3" start_day="$4" title="$5" master="$6" source="$7"
+  local cwd root profile max_c max_d due=0 why=""
+  cwd="$(printf '%s' "$payload" | grep -o '"cwd"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 \
+    | sed 's/^"cwd"[[:space:]]*:[[:space:]]*"//; s/"$//')"
+  root=""
+  [ -n "$cwd" ] && [ -d "$cwd" ] && root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)"
+  [ -n "$root" ] || root="$cwd"
+  profile="$root/.claude/master.md"
+  max_c="$(profile_number "$profile" 'Worker restart after compactions' 2)"
+  max_d="$(profile_number "$profile" 'Worker restart after days' 2)"
+  [ "$max_c" -gt 0 ] && [ "$count" -ge "$max_c" ] && { due=1; why="$max_c compactions"; }
+  [ "$max_d" -gt 0 ] && [ -n "$start_day" ] && [ "$days" -ge "$max_d" ] && { due=1; why="${why:+$why or }$max_d days"; }
+  [ "$due" -eq 1 ] || return 0
+  local name="${title:-this session}" age=""
+  if [ -n "$start_day" ]; then
+    if [ "$days" -eq 1 ]; then age=", running 1 day (since $start_day)"; else age=", running $days days (since $start_day)"; fi
+  fi
+  local msg="Worker restart check: compaction $count$age. project-master says a long-running worker is due a restart after $why. In your next REPORT to $master, add this line: RESTART DUE: $name, compaction $count${start_day:+, since $start_day}. $master runs the restart (master skill, Restarting a long-running worker); do not pause or relaunch yourself unless it asks."
+  [ "$source" = "resume" ] && msg="$msg (Session resumed.)"
+  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$msg"
+}
 
 main() {
   local payload transcript source session_dir title="" is_master=0
@@ -42,7 +85,14 @@ main() {
       is_master=1
     fi
   fi
-  [ "$is_master" -eq 1 ] || return 0
+  local worker_of=""
+  if [ "$is_master" -eq 0 ]; then
+    # A launched worker's brief is its first user message, stored as a plain JSON string. Quoted copies
+    # (tool output) are JSON-escaped and do not match.
+    worker_of="$(grep -m 1 -o '"role":"user","content":"You are a worker session reporting to [A-Za-z0-9._-]*-MASTER' "$transcript" \
+      | sed 's/.*reporting to //')"
+    [ -n "$worker_of" ] || return 0
+  fi
 
   # --- compactions and age ---------------------------------------------------------------------------------
   local count first_ts start_epoch now start_day today days due msg
@@ -66,6 +116,11 @@ main() {
     days=$(( (now - start_epoch) / 86400 ))
     start_day="$(date -r "$start_epoch" +%F 2>/dev/null || date -d "@$start_epoch" +%F 2>/dev/null)"
     today="$(date -r "$now" +%F 2>/dev/null || date -d "@$now" +%F 2>/dev/null)"
+  fi
+
+  if [ -n "$worker_of" ]; then
+    worker_message "$payload" "$count" "$days" "$start_day" "$title" "$worker_of" "$source"
+    return 0
   fi
 
   due=0

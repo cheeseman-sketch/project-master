@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# launch-session: open a new terminal window running a Claude Code worker session.
-# Part of the project-master plugin; used by the master skill (SKILL.md § Child sessions).
-# Supported terminals: Terminal, iTerm, Ghostty (macOS only).
+# launch-session: open a new terminal window running a Claude Code worker session, and (for a worker
+# restart only) close the superseded copy of one.
+# Part of the project-master plugin; used by the master skill (SKILL.md § Child sessions, and
+# restart-worker.md). Supported terminals: Terminal, iTerm, Ghostty (macOS only). Runs on bash 3.2.
 #
 #   launch-session detect
 #       Lists the supported terminal apps that are installed, one per line.
@@ -9,14 +10,41 @@
 #       Saves the choice to ~/.claude/launch-session.conf (asked once, on first launch).
 #   launch-session run --repo <abs dir> --model <m> --effort <e> --name <name> --brief <file> [--terminal <App>]
 #       Opens the window: cd <repo> && claude --model m --effort e -n name "<brief text>".
+#       The new session records its pid and start time in ~/.claude/launch-session.launched, which is
+#       how `close` later knows this launcher started it.
+#   launch-session restart --repo .. --model .. --effort .. --name <n> --master <project>-MASTER
+#                          --header <file> --note <abs resume note> [--terminal <App>]
+#       Relaunches a paused worker under the same name. The brief is the role header file plus the
+#       standard restart instructions: read the note, re-arm every scheduled wake, REPORT 1 in WAKE lines.
+#   launch-session who <name>
+#       Lists every live session with that name (pid, start, status, cwd, tty, launched-by-this-launcher),
+#       oldest first. During a restart the old and the new copy share the name; the pid tells them apart.
+#   launch-session check-wakes --note <file> --report <file>
+#       Compares the note's "Scheduled wakes" checklist with the WAKE lines of the new session's REPORT 1.
+#       Prints MATCH (exit 0) or MISMATCH with the differences (exit 1); exit 2 if either side is unreadable.
+#   launch-session close <pid> --expect-name <n> --expect-cwd <dir> --keep-pid <new pid>
+#       Closes the SUPERSEDED copy in a restart. Refuses (exit 3, nothing touched) unless every check
+#       passes: pid alive, a claude process, not this caller's own session, session name and idle status
+#       match, cwd is <dir> or below it, started by this launcher, no background shell, no scheduled cron
+#       or loop wake left, and <new pid> is a live, newer claude session of the same name. Then SIGTERM
+#       (never SIGKILL), waits for the exit, and closes the window by its tty. Exit 4: it did not exit.
 #
 # There is no colour flag in the claude CLI, so the person types /color in the new window.
 # The first launch in each terminal app triggers a macOS Automation prompt ("allow to control
 # Terminal"); it must be allowed once.
+#
+# Test seam: LAUNCH_SESSION_FAKE_PROC=<dir> reads process facts from <dir>/<pid>/{comm,args,tty,lstart,
+# ppid,cwd,children} instead of ps/lsof, and logs signals and window closes to <dir>/actions.log instead of
+# sending them. It can only make the script do LESS (nothing real is signalled or closed).
 set -euo pipefail
 
 CONF="$HOME/.claude/launch-session.conf"
+LEDGER="$HOME/.claude/launch-session.launched"
+SESSIONS_DIR="$HOME/.claude/sessions"
+PROJECTS_DIR="$HOME/.claude/projects"
 SUPPORTED=(Terminal iTerm Ghostty)
+FAKE="${LAUNCH_SESSION_FAKE_PROC:-}"
+CLOSE_WAIT="${LAUNCH_SESSION_CLOSE_WAIT:-15}"
 
 app_installed() {
   case "$1" in
@@ -28,6 +56,299 @@ app_installed() {
 }
 
 die() { echo "launch-session: $*" >&2; exit 1; }
+refuse() { echo "REFUSED: $*" >&2; echo "Nothing was signalled or closed. Fall back to telling the owner \"safe to close\"." >&2; exit 3; }
+
+# --- process probes (real, or the fake directory in tests) ---------------------------------------------------
+p_alive() { if [[ -n "$FAKE" ]]; then [[ -d "$FAKE/$1" ]]; else kill -0 "$1" 2>/dev/null; fi; }
+p_get() { # p_get <pid> <field>
+  local pid="$1" f="$2"
+  if [[ -n "$FAKE" ]]; then cat "$FAKE/$pid/$f" 2>/dev/null || true; return 0; fi
+  case "$f" in
+    comm) ps -o comm= -p "$pid" 2>/dev/null | sed 's/^ *//; s/ *$//' ;;
+    args) ps -ww -o args= -p "$pid" 2>/dev/null ;;
+    tty) ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ' ;;
+    lstart) ps -o lstart= -p "$pid" 2>/dev/null | sed 's/^ *//; s/ *$//' ;;
+    ppid) ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ' ;;
+    cwd) lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1 ;;
+    children) ps -ax -o ppid=,comm= 2>/dev/null | awk -v p="$pid" '$1 == p { $1 = ""; sub(/^ /, ""); print }' ;;
+  esac || true
+}
+p_tty_procs() { # comm of every process on a tty
+  local tty="$1" d
+  if [[ -n "$FAKE" ]]; then
+    for d in "$FAKE"/*/; do [[ -f "$d/tty" && "$(cat "$d/tty")" == "$tty" ]] && echo "$(cat "$d/comm")"; done; return 0
+  fi
+  ps -t "$tty" -o comm= 2>/dev/null | sed 's/^ *//' || true
+}
+real_ancestors() { # pids from $$ up to init, always from the real process table
+  local p=$$ n=0
+  while [[ -n "$p" && "$p" -gt 1 && $n -lt 64 ]]; do echo "$p"; p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"; n=$((n + 1)); done
+}
+ancestor_comms() { # comm of each ancestor of <pid> (from the probes)
+  local p="$1" n=0
+  while [[ -n "$p" && "$p" -gt 1 && $n -lt 32 ]]; do
+    p="$(p_get "$p" ppid)"; [[ -n "$p" ]] || break; echo "$(p_get "$p" comm)"; n=$((n + 1))
+  done
+}
+is_shell() { case "$(basename -- "${1#-}")" in zsh|bash|sh|fish|dash|ksh|tcsh|csh) return 0 ;; *) return 1 ;; esac; }
+real_dir() { (cd "$1" 2>/dev/null && pwd -P); }
+
+json_str() { # json_str <file> <key>: a flat string field
+  grep -o "\"$2\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$1" 2>/dev/null | head -n 1 | sed 's/.*:[[:space:]]*"//; s/"$//' || true
+}
+json_num() { grep -o "\"$2\"[[:space:]]*:[[:space:]]*[0-9]*" "$1" 2>/dev/null | head -n 1 | sed 's/.*:[[:space:]]*//' || true; }
+
+# --- Scheduled wakes parsing (pure) --------------------------------------------------------------------------
+# A note's checklist: under a heading "Scheduled wakes", lines "- [ ] <time + zone> | <check> | <re-arm>", or
+# a single "none". A report's lines: "WAKE <time + zone> | <check> | <id>", or "WAKE none". Compared on the
+# first two fields, case-folded with whitespace collapsed. Output: one key per line, or the word NONE.
+note_wakes() {
+  awk '
+    function norm(s) { gsub(/[[:space:]]+/, " ", s); sub(/^ /, "", s); sub(/ $/, "", s); return tolower(s) }
+    /^#+[[:space:]]*[Ss]cheduled [Ww]akes/ { insec = 1; seen = 1; next }
+    insec && /^#/ { insec = 0 }
+    insec {
+      line = $0; sub(/^[[:space:]]*[-*][[:space:]]*(\[[ xX]\][[:space:]]*)?/, "", line)
+      if (norm(line) ~ /^none\.?$/ || norm(line) ~ /^none[[:space:](]/) { none = 1; next }
+      n = split(line, f, "|"); if (n < 3) next
+      print norm(f[1]) " | " norm(f[2]); count++
+    }
+    END { if (!seen) exit 2; if (count == 0 && none) print "NONE"; else if (count == 0) exit 3 }
+  ' "$1"
+}
+report_wakes() {
+  awk '
+    function norm(s) { gsub(/[[:space:]]+/, " ", s); sub(/^ /, "", s); sub(/ $/, "", s); return tolower(s) }
+    { line = $0; sub(/^[[:space:]]*[-*]?[[:space:]]*`?/, "", line); sub(/`[[:space:]]*$/, "", line) }
+    line ~ /^WAKE[[:space:]]/ {
+      sub(/^WAKE[[:space:]]+/, "", line)
+      if (norm(line) ~ /^none\.?$/) { none = 1; next }
+      n = split(line, f, "|")
+      if (n < 3 || norm(f[3]) == "") { bad++; next }
+      print norm(f[1]) " | " norm(f[2]); count++
+    }
+    END { if (bad) exit 4; if (count == 0 && none) print "NONE"; else if (count == 0) exit 3 }
+  ' "$1"
+}
+check_wakes() { # check_wakes <note> <report>
+  local note="$1" report="$2" a b rc tmp
+  [[ -r "$note" ]] || { echo "UNREADABLE: note $note"; return 2; }
+  [[ -r "$report" ]] || { echo "UNREADABLE: report $report"; return 2; }
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/launch-session-wakes.XXXXXX")"
+  rc=0; note_wakes "$note" > "$tmp/a" || rc=$?
+  case "$rc" in 0) ;; 2) echo "UNREADABLE: the note has no \"Scheduled wakes\" section"; rm -rf "$tmp"; return 2 ;;
+    *) echo "UNREADABLE: the note's \"Scheduled wakes\" section has no wake lines and does not say none"; rm -rf "$tmp"; return 2 ;; esac
+  rc=0; report_wakes "$report" > "$tmp/b" || rc=$?
+  case "$rc" in 0) ;; 4) echo "MISMATCH: a WAKE line has fewer than 3 fields or no task/cron id"; rm -rf "$tmp"; return 1 ;;
+    *) echo "MISMATCH: the report has no WAKE lines (expected one per wake, or \"WAKE none\")"; rm -rf "$tmp"; return 1 ;; esac
+  sort "$tmp/a" > "$tmp/as"; sort "$tmp/b" > "$tmp/bs"
+  if cmp -s "$tmp/as" "$tmp/bs"; then
+    if [[ "$(cat "$tmp/as")" == NONE ]]; then echo "MATCH: no scheduled wakes on either side"; else echo "MATCH: $(wc -l < "$tmp/as" | tr -d ' ') wake(s)"; fi
+    rm -rf "$tmp"; return 0
+  fi
+  echo "MISMATCH"
+  comm -23 "$tmp/as" "$tmp/bs" | sed 's/^/  in the note, not re-armed: /'
+  comm -13 "$tmp/as" "$tmp/bs" | sed 's/^/  re-armed, not in the note: /'
+  rm -rf "$tmp"; return 1
+}
+
+# --- transcript checks for wakes the old session may still hold ----------------------------------------------
+# Session-only crons and loop wakeups live inside the session, so the only outside view is its transcript.
+# Wake-free means: no CronCreate after its last CronList, that CronList returned "No scheduled jobs", and its
+# last ScheduleWakeup (if any) was a stop.
+transcript_wakes_clear() { # prints a reason and returns 1 if not provably clear
+  local t="$1" last_create last_list list_id last_wake
+  last_create="$(grep -n '"type":"tool_use","id":"[^"]*","name":"CronCreate"' "$t" | tail -n 1 | cut -d: -f1)"
+  if [[ -n "$last_create" ]]; then
+    last_list="$(grep -n '"type":"tool_use","id":"[^"]*","name":"CronList"' "$t" | tail -n 1 | cut -d: -f1)"
+    if [[ -z "$last_list" || "$last_list" -lt "$last_create" ]]; then
+      echo "it created a cron job and has not run CronList since (the wrapup PAUSE re-list step is missing)"; return 1
+    fi
+    list_id="$(sed -n "${last_list}p" "$t" | grep -o '"id":"[^"]*","name":"CronList"' | tail -n 1 | sed 's/^"id":"//; s/".*//')"
+    if ! grep -F "\"tool_use_id\":\"$list_id\"" "$t" | grep 'No scheduled jobs' >/dev/null; then
+      echo "its last CronList did not return \"No scheduled jobs\""; return 1
+    fi
+  fi
+  last_wake="$(grep -o '"type":"tool_use","id":"[^"]*","name":"ScheduleWakeup","input":{[^}]*}' "$t" | tail -n 1)"
+  if [[ -n "$last_wake" && "$last_wake" != *'"stop":true'* ]]; then
+    echo "its last ScheduleWakeup was not a stop, so a loop wake may still be pending"; return 1
+  fi
+  return 0
+}
+
+# --- window closing ------------------------------------------------------------------------------------------
+osa() { # osa <script>: run AppleScript, or log it in fake mode
+  if [[ -n "$FAKE" ]]; then printf 'osascript %s\n' "$(printf '%s' "$1" | tr '\n' ' ')" >> "$FAKE/actions.log"; echo "${LAUNCH_SESSION_FAKE_OSA_RESULT:-closed}"; return 0; fi
+  osascript -e "$1" 2>&1 || true
+}
+close_window() { # close_window <app> <tty>: prints what happened
+  local app="$1" tty="$2" rest left=""
+  # Leave the window if anything but a shell is still running on that tty.
+  while IFS= read -r rest; do [[ -z "$rest" ]] && continue; is_shell "$rest" || [[ "$(basename -- "$rest")" == login ]] || left="$left $rest"; done < <(p_tty_procs "$tty")
+  if [[ -n "$left" ]]; then echo "window left open: still running on $tty:$left"; return 0; fi
+  case "$app" in
+    Terminal)
+      echo "Terminal: $(osa "tell application \"Terminal\"
+  repeat with w in windows
+    repeat with t in tabs of w
+      if tty of t is \"/dev/$tty\" then
+        if (count of tabs of w) is 1 then
+          close w saving no
+          return \"closed\"
+        else
+          return \"window left open: it has other tabs\"
+        end if
+      end if
+    end repeat
+  end repeat
+  return \"no window on that tty (already closed)\"
+end tell")" ;;
+    iTerm)
+      echo "iTerm: $(osa "tell application \"iTerm\"
+  repeat with w in windows
+    repeat with t in tabs of w
+      repeat with s in sessions of t
+        if tty of s is \"/dev/$tty\" then
+          close s
+          return \"closed\"
+        end if
+      end repeat
+    end repeat
+  end repeat
+  return \"no window on that tty (already closed)\"
+end tell")" ;;
+    Ghostty) echo "Ghostty: the window closes itself when its command exits (no AppleScript used)" ;;
+    *) echo "window left open: terminal app not recognised" ;;
+  esac
+}
+
+cmd_close() {
+  local pid="${1:-}"; shift || true
+  local name="" cwd="" keep=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --expect-name) name="${2:-}"; shift 2 ;;
+      --expect-cwd) cwd="${2:-}"; shift 2 ;;
+      --keep-pid) keep="${2:-}"; shift 2 ;;
+      *) refuse "unknown option $1" ;;
+    esac
+  done
+  [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 ]] || refuse "close needs the old session's pid first"
+  [[ -n "$name" && -n "$cwd" && -n "$keep" ]] || refuse "close needs --expect-name, --expect-cwd and --keep-pid"
+  [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || refuse "bad name"
+  [[ "$keep" =~ ^[0-9]+$ ]] || refuse "bad --keep-pid"
+  [[ "$pid" != "$keep" ]] || refuse "pid and --keep-pid are the same session; never close the new copy"
+  local anc; anc="$(real_ancestors)"
+  case "
+$anc
+" in *"
+$pid
+"*) refuse "pid $pid is this caller's own session" ;; esac
+
+  # The old copy.
+  p_alive "$pid" || refuse "pid $pid is not running"
+  [[ "$(basename -- "$(p_get "$pid" comm)")" == claude ]] || refuse "pid $pid is not a claude process ($(p_get "$pid" comm))"
+  local sj="$SESSIONS_DIR/$pid.json"
+  [[ -f "$sj" ]] || refuse "no session record $sj, so its name and idle status can't be confirmed"
+  [[ "$(json_str "$sj" name)" == "$name" ]] || refuse "pid $pid is named '$(json_str "$sj" name)', not '$name'"
+  [[ "$(json_str "$sj" status)" == idle ]] || refuse "pid $pid is not idle (status '$(json_str "$sj" status)')"
+  local want have
+  want="$(real_dir "$cwd")" || true; [[ -n "$want" ]] || refuse "--expect-cwd $cwd is not a directory"
+  have="$(p_get "$pid" cwd)"; [[ -n "$have" ]] && have="$(real_dir "$have" || echo "$have")"
+  [[ -n "$have" && ( "$have" == "$want" || "$have" == "$want"/* ) ]] || refuse "pid $pid runs in '$have', not in $want"
+  local tty; tty="$(p_get "$pid" tty)"
+  [[ -n "$tty" && "$tty" != "??" ]] || refuse "pid $pid has no terminal"
+
+  # Started by this launcher: the ledger line its runner wrote (pid + start time + name), or, for windows
+  # opened before the ledger existed, the launcher's exact command line with a worker brief.
+  local lstart args evidence=""
+  lstart="$(p_get "$pid" lstart)"
+  if [[ -f "$LEDGER" ]] && awk -F'\t' -v p="$pid" -v s="$lstart" -v n="$name" '$1 == p && $2 == s && $3 == n { f = 1 } END { exit !f }' "$LEDGER"; then
+    evidence="launch ledger"
+  else
+    args="$(p_get "$pid" args)"
+    case "$args" in *" -n $name You are a worker session reporting to "*) evidence="launcher command line" ;; esac
+  fi
+  [[ -n "$evidence" ]] || refuse "pid $pid was not started by launch-session (no ledger entry, no launcher command line)"
+
+  # No wake left in the old copy: no background shell, and nothing pending in its transcript.
+  local child shells=""
+  while IFS= read -r child; do [[ -n "$child" ]] && is_shell "$child" && shells="$shells $child"; done < <(p_get "$pid" children)
+  [[ -z "$shells" ]] || refuse "pid $pid still has a background shell running (${shells# }); it must stop its own background tasks first"
+  local sid transcript reason
+  sid="$(json_str "$sj" sessionId)"
+  [[ "$sid" =~ ^[A-Za-z0-9-]+$ ]] || refuse "session record has no usable sessionId"
+  transcript="$(ls "$PROJECTS_DIR"/*/"$sid".jsonl 2>/dev/null | head -n 1 || true)"
+  [[ -n "$transcript" ]] || refuse "transcript for session $sid not found, so its scheduled wakes can't be checked"
+  reason="$(transcript_wakes_clear "$transcript")" || refuse "pid $pid may still hold a scheduled wake: $reason"
+
+  # The new copy.
+  p_alive "$keep" || refuse "the new session (pid $keep) is not running"
+  [[ "$(basename -- "$(p_get "$keep" comm)")" == claude ]] || refuse "the new session (pid $keep) is not a claude process"
+  local kj="$SESSIONS_DIR/$keep.json"
+  [[ -f "$kj" && "$(json_str "$kj" name)" == "$name" ]] || refuse "the new session (pid $keep) is not named '$name'"
+  local s_old s_new; s_old="$(json_num "$sj" startedAt)"; s_new="$(json_num "$kj" startedAt)"
+  [[ -n "$s_old" && -n "$s_new" && "$s_new" -gt "$s_old" ]] || refuse "pid $keep did not start after pid $pid, so it is not the newer copy"
+  [[ "$(p_get "$keep" tty)" != "$tty" ]] || refuse "the new session shares the old one's terminal"
+
+  # Which terminal app hosts it (read before it exits).
+  local app="" c
+  while IFS= read -r c; do
+    case "$(basename -- "$c")" in Terminal) app=Terminal; break ;; iTerm2|iTermServer*) app=iTerm; break ;; ghostty|Ghostty) app=Ghostty; break ;; esac
+  done < <(ancestor_comms "$pid")
+
+  # Act: SIGTERM only, then wait for the exit.
+  if [[ -n "$FAKE" ]]; then
+    echo "kill -TERM $pid" >> "$FAKE/actions.log"; [[ -f "$FAKE/$pid/stubborn" ]] || rm -rf "${FAKE:?}/$pid"
+  else
+    kill -TERM "$pid"
+  fi
+  local waited=0
+  while p_alive "$pid" && [[ $waited -lt $CLOSE_WAIT ]]; do sleep 1; waited=$((waited + 1)); done
+  if p_alive "$pid"; then
+    echo "NOT CLOSED: pid $pid ($name) is still running ${CLOSE_WAIT}s after SIGTERM. It is never sent SIGKILL; tell the owner." >&2
+    exit 4
+  fi
+  local win; win="$(close_window "$app" "$tty")"
+  echo "CLOSED: old '$name' pid $pid on $tty (${app:-unknown terminal}; started by this launcher, from the $evidence)"
+  echo "  window: $win"
+  if p_alive "$keep"; then echo "  kept: new '$name' pid $keep is still running"
+  else echo "  WARNING: the new '$name' pid $keep is no longer running; tell the owner now" >&2; exit 5; fi
+}
+
+cmd_who() {
+  local name="${1:-}" f pid
+  [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || die "who needs a session name"
+  local rows=""
+  for f in "$SESSIONS_DIR"/*.json; do
+    [[ -f "$f" && "$(json_str "$f" name)" == "$name" ]] || continue
+    pid="$(json_num "$f" pid)"; [[ -n "$pid" ]] || pid="$(basename "$f" .json)"
+    p_alive "$pid" || continue
+    local launched=no ls; ls="$(p_get "$pid" lstart)"
+    [[ -f "$LEDGER" ]] && awk -F'\t' -v p="$pid" -v s="$ls" '$1 == p && $2 == s { f = 1 } END { exit !f }' "$LEDGER" && launched=yes
+    rows="$rows$(json_num "$f" startedAt)	pid=$pid	started=$ls	status=$(json_str "$f" status)	tty=$(p_get "$pid" tty)	cwd=$(json_str "$f" cwd)	launched=$launched
+"
+  done
+  [[ -n "$rows" ]] || { echo "no live session named '$name'"; return 1; }
+  printf '%s' "$rows" | sort -n | cut -f2- | awk '{ print } END { if (NR > 1) print "(" NR " sessions share the name; the last one listed is the newest)" }'
+}
+
+restart_brief() { # restart_brief <header> <note> <name> <master>
+  cat "$1"
+  cat <<EOF
+
+RESTART of $3: you replace an earlier session of the same name. It paused with /wrapup and cancelled its own
+scheduled wakes, so none of them will fire unless you re-arm them.
+1. Read $2 end to end. It is your resume note.
+2. Re-arm every line of its "Scheduled wakes" checklist exactly as written: the same time and zone, the same
+   check. A wake whose time has already passed: run its check now and use ran-now as its id.
+3. Then send REPORT 1 to $4 with one line per wake, copying the time and the check text from the note word
+   for word, and adding the task or cron id you got when you re-armed it:
+   WAKE <time + zone> | <check> | <task or cron id>
+   If the checklist says none, send the single line: WAKE none
+4. Carry on from the note's next step. Do not message or close the old session; $4 does that.
+EOF
+}
 
 cmd="${1:-}"; shift || true
 case "$cmd" in
@@ -37,22 +358,46 @@ case "$cmd" in
   set-terminal)
     a="${1:-}"; app_installed "$a" || die "'$a' is not a supported, installed terminal (run: launch-session detect)"
     mkdir -p "$(dirname "$CONF")"; printf 'terminal=%s\n' "$a" > "$CONF"; echo "saved terminal=$a to $CONF"; exit 0 ;;
-  run) ;;
-  *) sed -n '2,15p' "$0"; exit 2 ;;
+  who) cmd_who "$@"; exit $? ;;
+  check-wakes)
+    note="" report=""
+    while [[ $# -gt 0 ]]; do case "$1" in --note) note="${2:-}"; shift 2 ;; --report) report="${2:-}"; shift 2 ;; *) die "unknown option $1" ;; esac; done
+    [[ -n "$note" && -n "$report" ]] || die "check-wakes needs --note and --report"
+    rc=0; check_wakes "$note" "$report" || rc=$?; exit $rc ;;
+  close) cmd_close "$@"; exit 0 ;;
+  run|restart) ;;
+  *) sed -n '2,38p' "$0"; exit 2 ;;
 esac
 
-repo= model= effort= name= brief= term=
+repo= model= effort= name= brief= term= master= header= note=
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) repo="$2"; shift 2 ;;
     --model) model="$2"; shift 2 ;;
     --effort) effort="$2"; shift 2 ;;
     --name) name="$2"; shift 2 ;;
-    --brief) brief="$2"; shift 2 ;;
+    --brief) [[ "$cmd" == run ]] || die "restart builds its own brief; use --header and --note"; brief="$2"; shift 2 ;;
     --terminal) term="$2"; shift 2 ;;
+    --master) master="$2"; shift 2 ;;
+    --header) header="$2"; shift 2 ;;
+    --note) note="$2"; shift 2 ;;
     *) die "unknown option $1" ;;
   esac
 done
+if [[ "$cmd" == restart ]]; then
+  [[ -n "$master" && -n "$header" && -n "$note" ]] || die "restart needs --master --header --note (plus --repo --model --effort --name)"
+  [[ "$master" =~ ^[A-Za-z0-9._-]+-MASTER$ ]] || die "--master must be a <project>-MASTER name"
+  [[ "$note" == /* && -s "$note" ]] || die "--note must be an absolute path to a non-empty resume note"
+  [[ -s "$header" ]] || die "header file empty or missing: $header"
+  grep -q 'You are a worker session reporting to ' "$header" || die "the header must be the role header block (\"You are a worker session reporting to ...\")"
+  rc=0; note_wakes "$note" >/dev/null || rc=$?
+  [[ $rc -eq 0 ]] || die "the note has no usable \"Scheduled wakes\" checklist (one line per wake, or none); ask the worker to redo its PAUSE"
+  [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || die "name must be letters, digits, . _ - only"
+  bdir="$(mktemp -d "${TMPDIR:-/tmp}/launch-session-restart.XXXXXX")"
+  restart_brief "$header" "$note" "$name" "$master" > "$bdir/brief.md"
+  brief="$bdir/brief.md"
+  [[ -n "${LAUNCH_SESSION_PRINT_BRIEF:-}" ]] && { cat "$brief"; exit 0; }
+fi
 [[ -n "$repo" && -n "$model" && -n "$effort" && -n "$name" && -n "$brief" ]] || die "run needs --repo --model --effort --name --brief"
 [[ -d "$repo" ]] || die "repo dir not found: $repo"
 [[ -s "$brief" ]] || die "brief file empty or missing: $brief"
@@ -65,12 +410,15 @@ fi
 app_installed "$term" || die "terminal '$term' is not installed"
 command -v claude >/dev/null || die "claude CLI not on PATH"
 
-# A per-launch runner script keeps the brief out of AppleScript quoting entirely.
+# A per-launch runner script keeps the brief out of AppleScript quoting entirely. exec keeps the runner's
+# pid, so the pid and start time it records in the ledger are those of the claude process itself.
 dir="$(mktemp -d "${TMPDIR:-/tmp}/launch-session.XXXXXX")"
 cp "$brief" "$dir/brief.md"
+mkdir -p "$(dirname "$LEDGER")"
 cat > "$dir/run.sh" <<EOF
 #!/usr/bin/env bash
 cd $(printf '%q' "$repo") || exit 1
+printf '%s\t%s\t%s\t%s\n' "\$\$" "\$(ps -o lstart= -p \$\$ | sed 's/^ *//; s/ *\$//')" $(printf '%q' "$name") $(printf '%q' "$repo") >> $(printf '%q' "$LEDGER")
 printf '\\033]0;%s\\007' $(printf '%q' "$name")
 exec claude --model $(printf '%q' "$model") --effort $(printf '%q' "$effort") -n $(printf '%q' "$name") "\$(cat $(printf '%q' "$dir/brief.md"))"
 EOF

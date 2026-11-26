@@ -107,6 +107,8 @@ Both skills start with a quick update check (`skills/master/bin/check-update`):
 6. The worker sends REPORTs to MASTER. MASTER verifies them (merged means *on the default branch by path*, not
    "the PR says merged") and relays them to you with one recommendation.
 7. When the worker is done, MASTER tells it to run `wrapup`, then tells you which windows are safe to close.
+   A long-running worker that is due a restart is paused, relaunched and checked by MASTER, which closes the
+   old window itself (see [Restarting a long-running worker](#restarting-a-long-running-worker)).
 8. When MASTER's own context gets full, say "hand over MASTER". It writes a handover block, tells the workers
    to hold, and gives you the three restart steps.
 
@@ -165,19 +167,48 @@ The profile `.claude/master.md` is committed to the repo, so treat it as untrust
 - **No secrets** are written to commits, memory or the handover, and staged changes are scanned before a push.
   The one exception: a live one-time merge token is kept in the local handover file (outside the repo) so it
   survives a MASTER handover, and in the scratchpad brief of a "can merge" launch.
+- **MASTER closes one kind of window only:** the old copy of a worker it relaunched, once the new copy is
+  confirmed. The close refuses, and touches nothing, on any doubt. It never uses SIGKILL. Every other window is
+  yours to close.
 
 ## Handover reminder hook
 
 The plugin ships one hook, `hooks/handover-check`, on SessionStart after a compaction or a resume. In a MASTER
 session (title ending `-MASTER`, or one where the master skill was run) it tells the model how many times the
 session has been compacted and when it started, and to recommend a handover after 2 compactions or once the
-session has run past the day it started on. Every other session sees nothing. It needs only bash, grep and date,
-and on any error it stays silent rather than block the session.
+session has run past the day it started on. In a worker session (one whose brief starts "You are a worker
+session reporting to <X>-MASTER") it says, once the worker is due a restart (2 compactions or 2 days by
+default), to add `RESTART DUE` to its next REPORT. That is a message only; MASTER does the restart. Set
+`Worker restart after compactions:` and `Worker restart after days:` in the profile to change the limits, or
+to `0` to turn the nudge off. Every other session sees nothing. It needs only bash, grep, awk and date, and on
+any error it stays silent rather than block the session.
 
 **Its limit:** it only runs when a session compacts or resumes. A MASTER that runs past the end of the day
 without compacting is not caught by it; for that, put the rule in your own always-loaded instructions (for
 example your user CLAUDE.md): "Hand over at the end of each working day or after 2 compactions, whichever comes
 first."
+
+## Restarting a long-running worker
+
+Some workers run for days and hold **scheduled wakes**: a cron one-shot at 18:10, a loop that checks CI every
+30 minutes, a background watcher. Those live only inside that session, so a plain restart loses them, and an
+overlap fires them twice. MASTER restarts such a worker in four steps (`skills/master/restart-worker.md`):
+
+1. **Pause.** The worker runs `wrapup` in PAUSE mode. Its resume note lists every wake under
+   `## Scheduled wakes`, and it cancels them all and confirms.
+2. **Relaunch** under the same name: `launch-session restart` builds the brief (read the note, re-arm every
+   wake, then report one `WAKE <time+zone> | <check> | <id>` line per wake).
+3. **Compare.** `launch-session check-wakes` matches the new REPORT against the note. On a mismatch MASTER
+   stops and tells you.
+4. **Close the old window.** Only once the new copy is confirmed live with matching wakes and the old one
+   reported its pause done. `launch-session close <old pid> --expect-name <n> --expect-cwd <repo> --keep-pid
+   <new pid>` checks the pid, name, idle status, folder, that the launcher started it, that it holds no wake,
+   and that the new copy is alive and newer. Then it sends SIGTERM and closes that window by its terminal
+   device (Terminal and iTerm; Ghostty closes its own). On any doubt it refuses, and MASTER tells you "safe to
+   close" instead.
+
+`launch-session who <name>` lists every live session with that name, oldest first, so the two copies are told
+apart by pid, never by name.
 
 ## How this differs from just saving context
 
@@ -199,16 +230,19 @@ answer:
 .claude-plugin/plugin.json        plugin manifest
 .claude-plugin/marketplace.json   single-plugin marketplace (this repo)
 skills/master/SKILL.md            the coordinator routine
-skills/master/bin/launch-session  opens a worker session in a new terminal window (macOS)
+skills/master/restart-worker.md   the worker-restart procedure (pause, relaunch, compare wakes, close)
+skills/master/bin/launch-session  opens a worker session in a new terminal window (macOS); restart, who,
+                                  check-wakes and close for a worker restart
 skills/master/bin/check-update    once-a-day check for a newer release
 skills/master/bin/upgrade         release notes, guided upgrade, snooze / disable
 skills/master/bin/update-lib.sh   helpers shared by the two above
 skills/wrapup/SKILL.md            the end-of-session ritual
 hooks/hooks.json                  SessionStart (compact|resume) hook wiring
-hooks/handover-check              the handover reminder for MASTER sessions
+hooks/handover-check              the handover reminder for MASTER, restart-due nudge for workers
 templates/master-profile.md       template for a project's .claude/master.md
 tests/update-check.test.sh        tests for the update check (bash tests/update-check.test.sh)
 tests/handover-check.test.sh      tests for the handover hook (bash tests/handover-check.test.sh)
+tests/launch-session.test.sh      tests for the launcher (fake process table; closes nothing real)
 ```
 
 ## Licence
