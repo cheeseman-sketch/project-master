@@ -67,7 +67,7 @@ p_get() { # p_get <pid> <field>
     comm) ps -o comm= -p "$pid" 2>/dev/null | sed 's/^ *//; s/ *$//' ;;
     args) ps -ww -o args= -p "$pid" 2>/dev/null ;;
     tty) ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ' ;;
-    lstart) ps -o lstart= -p "$pid" 2>/dev/null | sed 's/^ *//; s/ *$//' ;;
+    lstart) LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | sed 's/^ *//; s/ *$//' ;;
     ppid) ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ' ;;
     cwd) lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1 ;;
     children) ps -ax -o ppid=,comm= 2>/dev/null | awk -v p="$pid" '$1 == p { $1 = ""; sub(/^ /, ""); print }' ;;
@@ -411,14 +411,15 @@ app_installed "$term" || die "terminal '$term' is not installed"
 command -v claude >/dev/null || die "claude CLI not on PATH"
 
 # A per-launch runner script keeps the brief out of AppleScript quoting entirely. exec keeps the runner's
-# pid, so the pid and start time it records in the ledger are those of the claude process itself.
+# pid, so the pid and start time it records in the ledger are those of the claude process itself. Both sides
+# read the start time with LC_ALL=C, so a different locale in the new window can't break the match.
 dir="$(mktemp -d "${TMPDIR:-/tmp}/launch-session.XXXXXX")"
 cp "$brief" "$dir/brief.md"
 mkdir -p "$(dirname "$LEDGER")"
 cat > "$dir/run.sh" <<EOF
 #!/usr/bin/env bash
 cd $(printf '%q' "$repo") || exit 1
-printf '%s\t%s\t%s\t%s\n' "\$\$" "\$(ps -o lstart= -p \$\$ | sed 's/^ *//; s/ *\$//')" $(printf '%q' "$name") $(printf '%q' "$repo") >> $(printf '%q' "$LEDGER")
+printf '%s\t%s\t%s\t%s\n' "\$\$" "\$(LC_ALL=C ps -o lstart= -p \$\$ | sed 's/^ *//; s/ *\$//')" $(printf '%q' "$name") $(printf '%q' "$repo") >> $(printf '%q' "$LEDGER")
 printf '\\033]0;%s\\007' $(printf '%q' "$name")
 exec claude --model $(printf '%q' "$model") --effort $(printf '%q' "$effort") -n $(printf '%q' "$name") "\$(cat $(printf '%q' "$dir/brief.md"))"
 EOF

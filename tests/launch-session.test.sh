@@ -249,6 +249,29 @@ expect   "restart: refuses a --master that is not <project>-MASTER" 1 "$rc"
 out=$(rs --master acme-MASTER --header "$T/header.txt" --note "$T/note.md" --brief "$T/header.txt"); rc=$?
 expect   "restart: refuses --brief (it builds its own)"          1 "$rc"
 
+# --- run: the generated runner writes a ledger line that matches the real process ---------------------------
+# Stand-ins for claude and osascript on PATH: no window opens, and "claude" is a short sleep under the same pid.
+if [ -d /System/Applications/Utilities/Terminal.app ] || [ -d /Applications/Utilities/Terminal.app ]; then
+  rm -rf "$H"; mkdir -p "$H/.claude/sessions" "$T/fakebin"
+  printf '#!/bin/sh\nexec sleep 20\n' > "$T/fakebin/claude"; printf '#!/bin/sh\nexit 0\n' > "$T/fakebin/osascript"
+  chmod +x "$T/fakebin/claude" "$T/fakebin/osascript"
+  printf 'You are a worker session reporting to acme-MASTER.\nTASK\nx\n' > "$T/brief.txt"
+  out=$(HOME="$H" PATH="$T/fakebin:$PATH" bash "$LS" run --repo "$REPO" --model m --effort high --name acme-r \
+    --brief "$T/brief.txt" --terminal Terminal 2>&1)
+  runner=$(printf '%s' "$out" | sed -n 's/.*runner \(.*run\.sh\)$/\1/p')
+  PATH="$T/fakebin:$PATH" bash "$runner" >/dev/null 2>&1 & RP=$!
+  sleep 1
+  line=$(cat "$H/.claude/launch-session.launched" 2>/dev/null)
+  expect "run: the runner records its own pid (exec keeps it)" "$RP" "$(printf '%s' "$line" | cut -f1)"
+  expect "  ...with the start time ps reports for that pid"    "$(LC_ALL=C ps -o lstart= -p $RP | sed 's/^ *//; s/ *$//')" "$(printf '%s' "$line" | cut -f2)"
+  expect "  ...and the session name and repo"                  "acme-r	$REPO" "$(printf '%s' "$line" | cut -f3-4)"
+  printf '{"pid":%s,"sessionId":"s","cwd":"%s","startedAt":1,"name":"acme-r","status":"idle"}' "$RP" "$REPO" > "$H/.claude/sessions/$RP.json"
+  contains "  ...so who marks it launched=yes"                 "pid=$RP" "$(HOME="$H" LC_ALL=en_GB.UTF-8 bash "$LS" who acme-r | grep 'launched=yes')"
+  kill $RP 2>/dev/null; wait $RP 2>/dev/null
+else
+  echo "skip - run ledger test (no Terminal.app on this machine)"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
