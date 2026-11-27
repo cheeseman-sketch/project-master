@@ -2,6 +2,38 @@
 
 All notable changes to this plugin are recorded here. Versions follow `version` in `.claude-plugin/plugin.json`.
 
+## 0.3.0 — 2026-11-26
+
+Restarting a long-running worker, automated. Found when a MASTER restarted two long-running workers by hand:
+their scheduled wakes (timers, one-shot crons, background loops) lived only inside those sessions, and nothing
+wrote them down, checked that the new session re-armed them, or closed the old window.
+
+- master: new § Restarting a long-running worker, with the detail in `skills/master/restart-worker.md`. The
+  steps are pause, relaunch under the same name, compare the wakes, then close the old copy. The restart keeps
+  the worker's model, effort and merge class ("can merge" gets a fresh token).
+- master: new Safety rule 6. The only window MASTER closes is the superseded old copy at step 4 of a restart,
+  with `launch-session close`, when every check passes. Everything else is still the owner's to close.
+- wrapup: PAUSE always writes a resume note with a `## Scheduled wakes` checklist (or `- none`), cancels the
+  session's own wakes, re-runs CronList to confirm, and gives the note's absolute path in the final report.
+- launch-session: new `children` (see above), `restart` (builds the restart brief from a role header and the resume note), `who`
+  (every live session with a name, oldest first), `check-wakes` (note checklist against the new REPORT 1's
+  `WAKE` lines) and `close` (refuses on any mismatch; SIGTERM only, never SIGKILL; closes the window by tty for
+  Terminal and iTerm, while Ghostty closes its own). Launched sessions now record pid and start time in
+  `~/.claude/launch-session.launched`, which is how `close` knows the launcher started them. Windows opened
+  before 0.3.0 qualify only through the launcher's command line.
+- master, wrapup: a handover's "first jobs" line and a PAUSE's wakes now come from a live check, never from
+  memory (`skills/master/background-jobs.md`). New `launch-session children self` lists the session's own
+  shells (background tasks, Monitors, wait loops) and what each is running, leaving MCP servers out. Each job
+  is stopped if its question is answered or it is a stuck wait, and recorded otherwise. Found when a MASTER
+  wrote "Background jobs: none" while a stuck wait loop was still running under it.
+- hook: a worker session past 2 compactions or 2 days is told to add `RESTART DUE` to its next REPORT. That is
+  text only. New optional profile fields `Worker restart after compactions:` and `Worker restart after days:`
+  (0 or off turns it off).
+- Tests: `tests/launch-session.test.sh` (new; runs on a fake process table, closes nothing real) and worker
+  cases in `tests/handover-check.test.sh`.
+- **Limit:** the iTerm close path and the Ghostty self-close are written from those apps' documented behaviour
+  and have not been run on a real machine. The Terminal path was checked on a real throwaway window.
+
 ## 0.2.9 — 2026-11-04
 
 A launched worker can be given merge rights at launch.

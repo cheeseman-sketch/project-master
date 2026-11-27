@@ -24,6 +24,9 @@ and the step that uses it is skipped. Never put secrets here; this file is commi
 - **Ask-first rules:**                 (e.g. "CLAUDE.md § Authority"; default: ask before anything
                                         irreversible, any production write, any merge, any spend)
 - **Disk warning threshold:**          (default 20 GB)
+- **Worker restart after compactions:** (default 2; 0 or off = never. A worker past this tells MASTER
+                                        "RESTART DUE" in its next REPORT; MASTER then restarts it)
+- **Worker restart after days:**       (default 2; 0 or off = never)
 
 ## Verify now
 
